@@ -87,6 +87,41 @@ pub struct CompositeDetector {
     pub state_tx: mpsc::Sender<AgentState>,
 }
 
+impl AgentState {
+    /// Return the wire-format string for this state (e.g. `"working"`,
+    /// `"permission_prompt"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Working => "working",
+            Self::WaitingForInput => "waiting_for_input",
+            Self::PermissionPrompt { .. } => "permission_prompt",
+            Self::PlanPrompt { .. } => "plan_prompt",
+            Self::AskUser { .. } => "ask_user",
+            Self::Error { .. } => "error",
+            Self::AltScreen => "alt_screen",
+            Self::Exited { .. } => "exited",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Extract the prompt context from state variants that carry one.
+    pub fn prompt(&self) -> Option<&PromptContext> {
+        match self {
+            Self::PermissionPrompt { prompt }
+            | Self::PlanPrompt { prompt }
+            | Self::AskUser { prompt } => Some(prompt),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for AgentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl std::fmt::Debug for CompositeDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompositeDetector")

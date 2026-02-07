@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright 2025 Alfred Jean LLC
+
+syntax = "proto3";
+package coop.v1;
+
+option go_package = "github.com/anthropics/gas-town/gen/coop/v1;coopv1";
+
+service Coop {
+  // Terminal
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc GetScreen(GetScreenRequest) returns (GetScreenResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
+  rpc SendKeys(SendKeysRequest) returns (SendKeysResponse);
+  rpc Resize(ResizeRequest) returns (ResizeResponse);
+  rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
+  rpc StreamOutput(StreamOutputRequest) returns (stream OutputChunk);
+  rpc StreamScreen(StreamScreenRequest) returns (stream ScreenSnapshot);
+
+  // Agent
+  rpc GetAgentState(GetAgentStateRequest) returns (GetAgentStateResponse);
+  rpc Nudge(NudgeRequest) returns (NudgeResponse);
+  rpc Respond(RespondRequest) returns (RespondResponse);
+  rpc StreamState(StreamStateRequest) returns (stream AgentStateEvent);
+}
+
+// --- Terminal messages ---
+
+message GetHealthRequest {}
+message GetHealthResponse {
+  string status = 1;
+  optional int32 pid = 2;
+  int64 uptime_secs = 3;
+  string agent_type = 4;
+  int32 ws_clients = 5;
+}
+
+message GetScreenRequest {
+  enum Format {
+    TEXT = 0;
+    ANSI = 1;
+  }
+  Format format = 1;
+  bool include_cursor = 2;
+}
+
+message GetScreenResponse {
+  repeated string lines = 1;
+  int32 cols = 2;
+  int32 rows = 3;
+  bool alt_screen = 4;
+  CursorPosition cursor = 5;
+  uint64 sequence = 6;
+}
+
+message CursorPosition {
+  int32 row = 1;
+  int32 col = 2;
+}
+
+message GetStatusRequest {}
+message GetStatusResponse {
+  string state = 1;
+  optional int32 pid = 2;
+  int64 uptime_secs = 3;
+  optional int32 exit_code = 4;
+  uint64 screen_seq = 5;
+  uint64 bytes_read = 6;
+  uint64 bytes_written = 7;
+  int32 ws_clients = 8;
+}
+
+message SendInputRequest {
+  string text = 1;
+  bool enter = 2;
+}
+message SendInputResponse {
+  int32 bytes_written = 1;
+}
+
+message SendKeysRequest {
+  repeated string keys = 1;
+}
+message SendKeysResponse {
+  int32 bytes_written = 1;
+}
+
+message ResizeRequest {
+  int32 cols = 1;
+  int32 rows = 2;
+}
+message ResizeResponse {
+  int32 cols = 1;
+  int32 rows = 2;
+}
+
+message SendSignalRequest {
+  string signal = 1;
+}
+message SendSignalResponse {
+  bool delivered = 1;
+}
+
+message StreamOutputRequest {
+  uint64 from_offset = 1;
+}
+message OutputChunk {
+  bytes data = 1;
+  uint64 offset = 2;
+}
+
+message StreamScreenRequest {}
+message ScreenSnapshot {
+  repeated string lines = 1;
+  int32 cols = 2;
+  int32 rows = 3;
+  bool alt_screen = 4;
+  CursorPosition cursor = 5;
+  uint64 sequence = 6;
+}
+
+// --- Agent messages ---
+
+message PromptContext {
+  string type = 1;
+  optional string tool = 2;
+  optional string input_preview = 3;
+  optional string question = 4;
+  repeated string options = 5;
+  optional string summary = 6;
+  repeated string screen_lines = 7;
+}
+
+message GetAgentStateRequest {}
+message GetAgentStateResponse {
+  string agent_type = 1;
+  string state = 2;
+  uint64 since_seq = 3;
+  uint64 screen_seq = 4;
+  string detection_tier = 5;
+  optional PromptContext prompt = 6;
+  optional float idle_grace_remaining_secs = 7;
+}
+
+message NudgeRequest {
+  string message = 1;
+}
+message NudgeResponse {
+  bool delivered = 1;
+  string state_before = 2;
+  optional string reason = 3;
+}
+
+message RespondRequest {
+  optional bool accept = 1;
+  optional int32 option = 2;
+  optional string text = 3;
+}
+message RespondResponse {
+  bool delivered = 1;
+  string prompt_type = 2;
+  optional string reason = 3;
+}
+
+message StreamStateRequest {}
+message AgentStateEvent {
+  string prev = 1;
+  string next = 2;
+  uint64 seq = 3;
+  optional PromptContext prompt = 4;
+}

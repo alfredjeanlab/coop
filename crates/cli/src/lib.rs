@@ -7,3 +7,4 @@ pub mod event;
 pub mod pty;
 pub mod ring;
 pub mod screen;
+pub mod transport;
