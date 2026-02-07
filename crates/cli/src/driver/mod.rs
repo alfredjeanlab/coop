@@ -3,6 +3,9 @@
 
 pub mod grace;
 pub mod jsonl_stdout;
+pub mod process;
+pub mod screen_parse;
+pub mod unknown;
 
 use grace::IdleGraceTimer;
 use serde::{Deserialize, Serialize};

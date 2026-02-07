@@ -25,6 +25,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 avt.workspace = true
 nix.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

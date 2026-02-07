@@ -16,6 +16,7 @@ tokio-util = "0.7"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 avt = "0.17"
 nix = { version = "0.28", features = ["term", "process", "fs", "signal"] }
+regex = "1"
 
 # dev dependencies
 proptest = "1"
