@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
+pub mod claude;
 pub mod grace;
+pub mod hook_recv;
 pub mod jsonl_stdout;
+pub mod log_watch;
 pub mod process;
 pub mod screen_parse;
 pub mod unknown;

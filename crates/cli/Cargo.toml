@@ -25,6 +25,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 avt.workspace = true
 nix.workspace = true
+notify.workspace = true
 prost.workspace = true
 regex.workspace = true
 tokio-stream.workspace = true
@@ -35,6 +36,7 @@ tonic-build.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+tempfile.workspace = true
 yare.workspace = true
 
 [lints]
