@@ -1199,7 +1199,7 @@ Always returns `AgentState::Unknown` unless the child has exited.
 
 ## 6. Project Structure
 
-```example
+```diagram
 coop/
 ├── Cargo.toml
 ├── Cargo.lock

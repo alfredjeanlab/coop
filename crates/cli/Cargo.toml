@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "coop"
+path = "src/lib.rs"
+
 [[bin]]
 name = "coop"
 path = "src/main.rs"

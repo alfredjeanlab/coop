@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
+pub mod attach;
+
 use bytes::Bytes;
 use std::future::Future;
 use std::pin::Pin;
