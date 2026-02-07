@@ -21,11 +21,17 @@ prost = "0.13"
 regex = "1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tonic = "0.12"
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+base64 = "0.22"
+futures-util = "0.3"
 
 # build dependencies
 tonic-build = "0.12"
 
 # dev dependencies
+axum-test = "18"
 proptest = "1"
 tempfile = "3"
 yare = "3"

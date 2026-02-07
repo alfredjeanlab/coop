@@ -30,6 +30,11 @@ prost.workspace = true
 regex.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+base64.workspace = true
+futures-util.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
@@ -38,6 +43,7 @@ tonic-build.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 yare.workspace = true
+axum-test.workspace = true
 
 [lints]
 workspace = true
