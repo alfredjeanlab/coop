@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright 2025 Alfred Jean LLC
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(false)
+        .compile_protos(&["../../proto/coop/v1/coop.proto"], &["../../proto"])?;
+    Ok(())
+}

@@ -7,6 +7,7 @@
 //! implementations. The types are sufficient for both server stubs
 //! (Epic 05, 14) and client code to be written against.
 
+pub mod grpc;
 pub mod http;
 pub mod ws;
 

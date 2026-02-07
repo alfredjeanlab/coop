@@ -16,7 +16,13 @@ tokio-util = "0.7"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 avt = "0.17"
 nix = { version = "0.28", features = ["term", "process", "fs", "signal"] }
+prost = "0.13"
 regex = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tonic = "0.12"
+
+# build dependencies
+tonic-build = "0.12"
 
 # dev dependencies
 proptest = "1"
