@@ -19,12 +19,43 @@ cargo test    # unit tests only
 
 ## Directory Structure
 
-- `crates/cli/` — Main `coop` binary and library crate
-  - `src/pty/` — Terminal backend trait and implementations (spawn, attach)
-  - `src/driver/` — Agent state detection, nudge/respond encoding
-  - `src/screen.rs` — Screen snapshot
-  - `src/ring.rs` — Ring buffer
-  - `tests/` — Integration tests
+```toc
+crates/cli/               # Single crate (binary + lib)
+├── src/
+│   ├── main.rs            # CLI, startup
+│   ├── lib.rs             # Library root (re-exports modules)
+│   ├── error.rs           # ErrorCode enum
+│   ├── event.rs           # OutputEvent, StateChangeEvent, InputEvent, HookEvent
+│   ├── screen.rs          # Screen, ScreenSnapshot
+│   ├── ring.rs            # RingBuffer
+│   ├── pty/
+│   │   ├── mod.rs         # Backend trait
+│   │   ├── nbio.rs        # Non-blocking I/O helpers (PtyFd, AsyncFd)
+│   │   └── spawn.rs       # NativePty backend (forkpty + exec)
+│   └── driver/
+│       ├── mod.rs          # AgentState, Detector, NudgeEncoder traits
+│       ├── grace.rs        # IdleGraceTimer
+│       └── jsonl_stdout.rs # JsonlParser
+└── tests/
+    └── pty_backend.rs      # Integration tests for PTY backend
+DESIGN.md                   # Full design spec
+ROADMAP.md                  # Phased dependency graph
+```
+
+## Development
+
+### Quick checks
+
+```sh
+make check    # fmt, clippy, quench, build, test
+```
+
+### Conventions
+
+- License: BUSL-1.1, Copyright Alfred Jean LLC
+- All source files need SPDX license header
+- Rust 1.92+: native `async fn` in traits, no `async_trait` macro
+- Unit tests in `*_tests.rs` files with `#[cfg(test)] #[path = "..."] mod tests;`
 
 ## Commits
 

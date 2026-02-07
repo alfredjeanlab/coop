@@ -2,6 +2,8 @@
 // Copyright 2025 Alfred Jean LLC
 
 pub mod attach;
+pub mod nbio;
+pub mod spawn;
 
 use bytes::Bytes;
 use std::future::Future;
