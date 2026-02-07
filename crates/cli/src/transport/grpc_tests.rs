@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
+use std::sync::atomic::{AtomicI32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::driver::AgentState;
@@ -131,7 +133,7 @@ fn prompt_to_proto_handles_none_fields() {
 
 #[test]
 fn state_change_to_proto_converts_simple_transition() {
-    let event = StateChangeEvent {
+    let event = crate::event::StateChangeEvent {
         prev: AgentState::Starting,
         next: AgentState::Working,
         seq: 7,
@@ -154,7 +156,7 @@ fn state_change_to_proto_includes_prompt() {
         summary: None,
         screen_lines: vec![],
     };
-    let event = StateChangeEvent {
+    let event = crate::event::StateChangeEvent {
         prev: AgentState::Working,
         next: AgentState::PermissionPrompt {
             prompt: prompt.clone(),
@@ -273,6 +275,10 @@ fn mock_app_state() -> Arc<AppState> {
         start_time: Instant::now(),
         nudge_encoder: None,
         respond_encoder: None,
+        ws_clients: AtomicI32::new(0),
+        bytes_written: AtomicU64::new(0),
+        shutdown: CancellationToken::new(),
+        auth_token: None,
     })
 }
 
