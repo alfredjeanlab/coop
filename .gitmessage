@@ -1,0 +1,9 @@
+
+# <type>(<scope>): <description>
+#
+# Types: feat, fix, chore, docs, test, refactor, perf, ci, build, style
+# Scope: optional
+#
+# Examples:
+#   feat: add new feature
+#   fix: handle edge case
