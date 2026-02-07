@@ -19,22 +19,21 @@ to the PTY on its own — all input comes from explicit API calls.
 ## Directory Structure
 
 ```toc
-coop/
-├── crates/cli/       # Single crate (binary)
-│   └── src/
-│       ├── main.rs           # CLI, startup
-│       ├── error.rs          # ErrorCode enum
-│       ├── event.rs          # OutputEvent, StateChangeEvent, InputEvent, HookEvent
-│       ├── screen.rs         # Screen, ScreenSnapshot
-│       ├── ring.rs           # RingBuffer
-│       ├── pty/
-│       │   └── mod.rs        # Backend trait
-│       └── driver/
-│           ├── mod.rs         # AgentState, Detector, NudgeEncoder traits
-│           ├── grace.rs       # IdleGraceTimer
-│           └── jsonl_stdout.rs # JsonlParser
-├── DESIGN.md                  # Full design spec
-└── ROADMAP.md                 # Phased dependency graph
+crates/cli/               # Single crate (binary)
+├── src/
+│   ├── main.rs            # CLI, startup
+│   ├── error.rs           # ErrorCode enum
+│   ├── event.rs           # OutputEvent, StateChangeEvent, InputEvent, HookEvent
+│   ├── screen.rs          # Screen, ScreenSnapshot
+│   ├── ring.rs            # RingBuffer
+│   ├── pty/
+│   │   └── mod.rs         # Backend trait
+│   └── driver/
+│       ├── mod.rs          # AgentState, Detector, NudgeEncoder traits
+│       ├── grace.rs        # IdleGraceTimer
+│       └── jsonl_stdout.rs # JsonlParser
+DESIGN.md                   # Full design spec
+ROADMAP.md                  # Phased dependency graph
 ```
 
 ## Development
