@@ -12,7 +12,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use super::{encode_key, parse_signal};
+use super::{deliver_steps, encode_response, keys_to_bytes, parse_signal, read_ring_combined};
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
@@ -213,20 +213,17 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::SendKeysRequest>,
     ) -> Result<Response<proto::SendKeysResponse>, Status> {
         let req = request.into_inner();
-        let mut total = 0i32;
-        for key in &req.keys {
-            let encoded = encode_key(key).ok_or_else(|| {
-                ErrorCode::BadRequest.to_grpc_status(format!("unknown key: {key}"))
-            })?;
-            total += encoded.len() as i32;
-            self.state
-                .input_tx
-                .send(InputEvent::Write(Bytes::from(encoded)))
-                .await
-                .map_err(|_| ErrorCode::WriterBusy.to_grpc_status("input channel closed"))?;
-        }
+        let data = keys_to_bytes(&req.keys).map_err(|bad_key| {
+            ErrorCode::BadRequest.to_grpc_status(format!("unknown key: {bad_key}"))
+        })?;
+        let len = data.len() as i32;
+        self.state
+            .input_tx
+            .send(InputEvent::Write(Bytes::from(data)))
+            .await
+            .map_err(|_| ErrorCode::WriterBusy.to_grpc_status("input channel closed"))?;
         Ok(Response::new(proto::SendKeysResponse {
-            bytes_written: total,
+            bytes_written: len,
         }))
     }
 
@@ -357,16 +354,9 @@ impl proto::coop_server::Coop for CoopGrpc {
         // Release the read lock before writing
         drop(agent);
 
-        for step in steps {
-            self.state
-                .input_tx
-                .send(InputEvent::Write(Bytes::from(step.bytes)))
-                .await
-                .map_err(|_| ErrorCode::WriterBusy.to_grpc_status("input channel closed"))?;
-            if let Some(delay) = step.delay_after {
-                tokio::time::sleep(delay).await;
-            }
-        }
+        deliver_steps(&self.state.input_tx, steps)
+            .await
+            .map_err(|code| code.to_grpc_status("input channel closed"))?;
 
         Ok(Response::new(proto::NudgeResponse {
             delivered: true,
@@ -397,38 +387,24 @@ impl proto::coop_server::Coop for CoopGrpc {
 
         let agent = self.state.agent_state.read().await;
 
-        let steps = match &*agent {
-            AgentState::PermissionPrompt { .. } => {
-                let accept = req.accept.unwrap_or(false);
-                encoder.encode_permission(accept)
-            }
-            AgentState::PlanPrompt { .. } => {
-                let accept = req.accept.unwrap_or(false);
-                encoder.encode_plan(accept, req.text.as_deref())
-            }
-            AgentState::AskUser { .. } => {
-                encoder.encode_question(req.option.map(|o| o as u32), req.text.as_deref())
-            }
-            other => {
-                return Err(ErrorCode::NoPrompt
-                    .to_grpc_status(format!("agent is {} (no active prompt)", other.as_str())));
-            }
-        };
+        let steps = encode_response(
+            &agent,
+            encoder.as_ref(),
+            req.accept,
+            req.option,
+            req.text.as_deref(),
+        )
+        .map_err(|code| {
+            code.to_grpc_status(format!("agent is {} (no active prompt)", agent.as_str()))
+        })?;
 
         let prompt_type = agent.as_str().to_owned();
         // Release the read lock before writing
         drop(agent);
 
-        for step in steps {
-            self.state
-                .input_tx
-                .send(InputEvent::Write(Bytes::from(step.bytes)))
-                .await
-                .map_err(|_| ErrorCode::WriterBusy.to_grpc_status("input channel closed"))?;
-            if let Some(delay) = step.delay_after {
-                tokio::time::sleep(delay).await;
-            }
-        }
+        deliver_steps(&self.state.input_tx, steps)
+            .await
+            .map_err(|code| code.to_grpc_status("input channel closed"))?;
 
         Ok(Response::new(proto::RespondResponse {
             delivered: true,
@@ -452,18 +428,14 @@ impl proto::coop_server::Coop for CoopGrpc {
         // Replay buffered data from ring buffer
         {
             let ring = self.state.ring.read().await;
-            if let Some((a, b)) = ring.read_from(from_offset) {
-                let mut data = Vec::with_capacity(a.len() + b.len());
-                data.extend_from_slice(a);
-                data.extend_from_slice(b);
-                if !data.is_empty() {
-                    let _ = tx
-                        .send(Ok(proto::OutputChunk {
-                            data,
-                            offset: from_offset,
-                        }))
-                        .await;
-                }
+            let data = read_ring_combined(&ring, from_offset);
+            if !data.is_empty() {
+                let _ = tx
+                    .send(Ok(proto::OutputChunk {
+                        data,
+                        offset: from_offset,
+                    }))
+                    .await;
             }
         }
 

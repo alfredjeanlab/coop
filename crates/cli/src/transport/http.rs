@@ -18,7 +18,9 @@ use crate::error::ErrorCode;
 use crate::event::InputEvent;
 use crate::screen::CursorPosition;
 use crate::transport::state::AppState;
-use crate::transport::{error_response, keys_to_bytes, parse_signal};
+use crate::transport::{
+    deliver_steps, encode_response, error_response, keys_to_bytes, parse_signal, read_ring_combined,
+};
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -234,12 +236,7 @@ pub async fn output(
     let ring = s.ring.read().await;
     let total = ring.total_written();
 
-    let data = ring.read_from(q.offset);
-    let (a, b) = data.unwrap_or((&[], &[]));
-
-    let mut combined = Vec::with_capacity(a.len() + b.len());
-    combined.extend_from_slice(a);
-    combined.extend_from_slice(b);
+    let mut combined = read_ring_combined(&ring, q.offset);
 
     if let Some(limit) = q.limit {
         combined.truncate(limit);
@@ -321,7 +318,13 @@ pub async fn input_keys(
         }
     };
 
-    let data = keys_to_bytes(&req.keys);
+    let data = match keys_to_bytes(&req.keys) {
+        Ok(d) => d,
+        Err(bad_key) => {
+            return error_response(ErrorCode::BadRequest, format!("unknown key: {bad_key}"))
+                .into_response()
+        }
+    };
     let len = data.len() as i32;
     let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;
 
@@ -455,15 +458,7 @@ pub async fn agent_nudge(
     drop(agent);
 
     let steps = encoder.encode(&req.message);
-    for step in &steps {
-        let _ = s
-            .input_tx
-            .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
-            .await;
-        if let Some(delay) = step.delay_after {
-            tokio::time::sleep(delay).await;
-        }
-    }
+    let _ = deliver_steps(&s.input_tx, steps).await;
 
     Json(NudgeResponse {
         delivered: true,
@@ -493,40 +488,24 @@ pub async fn agent_respond(
         }
     };
 
-    let state = s.agent_state.read().await;
-    let prompt = state.prompt();
-    if prompt.is_none() {
-        return error_response(ErrorCode::NoPrompt, "no prompt active").into_response();
-    }
+    let agent = s.agent_state.read().await;
+    let prompt_type = agent.as_str().to_owned();
 
-    let prompt_type = state.as_str().to_owned();
-
-    let steps = match &*state {
-        AgentState::PermissionPrompt { .. } => {
-            encoder.encode_permission(req.accept.unwrap_or(false))
-        }
-        AgentState::PlanPrompt { .. } => {
-            encoder.encode_plan(req.accept.unwrap_or(false), req.text.as_deref())
-        }
-        AgentState::AskUser { .. } => {
-            encoder.encode_question(req.option.map(|o| o as u32), req.text.as_deref())
-        }
-        _ => {
-            return error_response(ErrorCode::NoPrompt, "no prompt active").into_response();
+    let steps = match encode_response(
+        &agent,
+        encoder.as_ref(),
+        req.accept,
+        req.option,
+        req.text.as_deref(),
+    ) {
+        Ok(s) => s,
+        Err(code) => {
+            return error_response(code, "no prompt active").into_response();
         }
     };
 
-    drop(state);
-
-    for step in &steps {
-        let _ = s
-            .input_tx
-            .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
-            .await;
-        if let Some(delay) = step.delay_after {
-            tokio::time::sleep(delay).await;
-        }
-    }
+    drop(agent);
+    let _ = deliver_steps(&s.input_tx, steps).await;
 
     Json(RespondResponse {
         delivered: true,

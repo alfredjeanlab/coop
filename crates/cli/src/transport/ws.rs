@@ -23,8 +23,10 @@ use crate::error::ErrorCode;
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::screen::CursorPosition;
 use crate::transport::auth;
-use crate::transport::keys_to_bytes;
 use crate::transport::state::AppState;
+use crate::transport::{
+    deliver_steps, encode_response, keys_to_bytes, parse_signal, read_ring_combined,
+};
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -105,6 +107,9 @@ pub enum ClientMessage {
     Auth {
         token: String,
     },
+    Signal {
+        name: String,
+    },
     Ping {},
 }
 
@@ -163,7 +168,7 @@ pub async fn ws_handler(
     let needs_auth = state.auth_token.is_some() && query.token.is_none();
 
     ws.on_upgrade(move |socket| {
-        let client_id = format!("ws-{}", uuid_v4_simple());
+        let client_id = format!("ws-{}", next_client_id());
         handle_connection(state, mode, socket, client_id, needs_auth)
     })
     .into_response()
@@ -318,11 +323,7 @@ async fn handle_client_message(
 
         ClientMessage::Replay { offset } => {
             let ring = state.ring.read().await;
-            let data = ring.read_from(offset);
-            let (a, b) = data.unwrap_or((&[], &[]));
-            let mut combined = Vec::with_capacity(a.len() + b.len());
-            combined.extend_from_slice(a);
-            combined.extend_from_slice(b);
+            let combined = read_ring_combined(&ring, offset);
             let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
             Some(ServerMessage::Output {
                 data: encoded,
@@ -367,7 +368,15 @@ async fn handle_client_message(
             if let Err(code) = state.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
-            let data = keys_to_bytes(&keys);
+            let data = match keys_to_bytes(&keys) {
+                Ok(d) => d,
+                Err(bad_key) => {
+                    return Some(ws_error(
+                        ErrorCode::BadRequest,
+                        &format!("unknown key: {bad_key}"),
+                    ));
+                }
+            };
             let _ = state
                 .input_tx
                 .send(InputEvent::Write(Bytes::from(data)))
@@ -422,15 +431,7 @@ async fn handle_client_message(
             }
             drop(agent);
             let steps = encoder.encode(&message);
-            for step in &steps {
-                let _ = state
-                    .input_tx
-                    .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
-                    .await;
-                if let Some(delay) = step.delay_after {
-                    tokio::time::sleep(delay).await;
-                }
-            }
+            let _ = deliver_steps(&state.input_tx, steps).await;
             None
         }
 
@@ -450,31 +451,35 @@ async fn handle_client_message(
                 None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
             };
             let agent = state.agent_state.read().await;
-            let steps = match &*agent {
-                AgentState::PermissionPrompt { .. } => {
-                    encoder.encode_permission(accept.unwrap_or(false))
-                }
-                AgentState::PlanPrompt { .. } => {
-                    encoder.encode_plan(accept.unwrap_or(false), text.as_deref())
-                }
-                AgentState::AskUser { .. } => {
-                    encoder.encode_question(option.map(|o| o as u32), text.as_deref())
-                }
-                _ => {
-                    return Some(ws_error(ErrorCode::NoPrompt, "no prompt active"));
-                }
-            };
+            let steps =
+                match encode_response(&agent, encoder.as_ref(), accept, option, text.as_deref()) {
+                    Ok(s) => s,
+                    Err(code) => {
+                        return Some(ws_error(code, "no prompt active"));
+                    }
+                };
             drop(agent);
-            for step in &steps {
-                let _ = state
-                    .input_tx
-                    .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
-                    .await;
-                if let Some(delay) = step.delay_after {
-                    tokio::time::sleep(delay).await;
-                }
-            }
+            let _ = deliver_steps(&state.input_tx, steps).await;
             None
+        }
+
+        ClientMessage::Signal { name } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
+            }
+            match parse_signal(&name) {
+                Some(signum) => {
+                    let _ = state.input_tx.send(InputEvent::Signal(signum)).await;
+                    None
+                }
+                None => Some(ws_error(
+                    ErrorCode::BadRequest,
+                    &format!("unknown signal: {name}"),
+                )),
+            }
         }
     }
 }
@@ -517,7 +522,7 @@ where
 }
 
 /// Generate a simple unique ID (not cryptographic, just for client tracking).
-fn uuid_v4_simple() -> String {
+fn next_client_id() -> String {
     use std::sync::atomic::AtomicU64;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);

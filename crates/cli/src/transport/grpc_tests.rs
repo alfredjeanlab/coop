@@ -7,6 +7,7 @@ use super::*;
 use crate::driver::AgentState;
 use crate::screen::{CursorPosition, ScreenSnapshot};
 use crate::test_support::{AnyhowExt, TestAppStateBuilder};
+use crate::transport::encode_key;
 
 // ---------------------------------------------------------------------------
 // Type conversion tests

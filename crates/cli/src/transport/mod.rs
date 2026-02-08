@@ -11,8 +11,6 @@ pub mod ws;
 
 pub use state::AppState;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -21,8 +19,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::driver::PromptContext;
+use crate::driver::{AgentState, NudgeStep, RespondEncoder};
 use crate::error::ErrorCode;
+use crate::event::InputEvent;
 
 // ---------------------------------------------------------------------------
 // Helpers (shared between HTTP and gRPC)
@@ -117,9 +116,49 @@ pub fn parse_signal(name: &str) -> Option<i32> {
     }
 }
 
-/// Convert a domain [`PromptContext`] to an HTTP [`http::AgentStateResponse`]-compatible prompt.
-pub fn prompt_to_http(p: &PromptContext) -> crate::driver::PromptContext {
-    p.clone()
+/// Send encoder steps to the PTY, respecting inter-step delays.
+pub async fn deliver_steps(
+    input_tx: &tokio::sync::mpsc::Sender<InputEvent>,
+    steps: Vec<NudgeStep>,
+) -> Result<(), ErrorCode> {
+    for step in steps {
+        input_tx
+            .send(InputEvent::Write(bytes::Bytes::from(step.bytes)))
+            .await
+            .map_err(|_| ErrorCode::WriterBusy)?;
+        if let Some(delay) = step.delay_after {
+            tokio::time::sleep(delay).await;
+        }
+    }
+    Ok(())
+}
+
+/// Match the current agent state to the appropriate encoder call.
+pub fn encode_response(
+    agent: &AgentState,
+    encoder: &dyn RespondEncoder,
+    accept: Option<bool>,
+    option: Option<i32>,
+    text: Option<&str>,
+) -> Result<Vec<NudgeStep>, ErrorCode> {
+    match agent {
+        AgentState::PermissionPrompt { .. } => {
+            Ok(encoder.encode_permission(accept.unwrap_or(false)))
+        }
+        AgentState::PlanPrompt { .. } => Ok(encoder.encode_plan(accept.unwrap_or(false), text)),
+        AgentState::AskUser { .. } => Ok(encoder.encode_question(option.map(|o| o as u32), text)),
+        _ => Err(ErrorCode::NoPrompt),
+    }
+}
+
+/// Read from the ring buffer starting at `offset`, combine wrapping slices,
+/// and return the raw bytes.
+pub fn read_ring_combined(ring: &crate::ring::RingBuffer, offset: u64) -> Vec<u8> {
+    let (a, b) = ring.read_from(offset).unwrap_or((&[], &[]));
+    let mut combined = Vec::with_capacity(a.len() + b.len());
+    combined.extend_from_slice(a);
+    combined.extend_from_slice(b);
+    combined
 }
 
 // ---------------------------------------------------------------------------
@@ -191,17 +230,17 @@ pub fn error_response(
 
 /// Convert named key sequences to raw bytes for PTY input.
 ///
-/// Delegates to [`encode_key`] for each key; unrecognised strings are passed
-/// through as literal UTF-8 bytes.
-pub fn keys_to_bytes(keys: &[String]) -> Vec<u8> {
+/// Delegates to [`encode_key`] for each key; returns an error with the
+/// unrecognised key name if any key is unknown.
+pub fn keys_to_bytes(keys: &[String]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     for key in keys {
         match encode_key(key) {
             Some(bytes) => out.extend_from_slice(&bytes),
-            None => out.extend_from_slice(key.as_bytes()),
+            None => return Err(key.clone()),
         }
     }
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,20 +276,4 @@ pub fn build_health_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/health", get(http::health))
         .route("/api/v1/agent/state", get(http::agent_state))
         .with_state(state)
-}
-
-/// Bind TCP and/or Unix socket listeners and serve the router.
-pub async fn serve(
-    state: Arc<AppState>,
-    tcp: Option<SocketAddr>,
-    _unix: Option<PathBuf>,
-) -> anyhow::Result<()> {
-    let router = build_router(state);
-
-    if let Some(addr) = tcp {
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, router).await?;
-    }
-
-    Ok(())
 }
