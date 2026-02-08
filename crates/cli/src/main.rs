@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use coop::config::{AgentType, Config};
+use coop::driver::claude::resume;
 use coop::driver::claude::{ClaudeDriver, ClaudeDriverConfig};
 use coop::driver::{AgentState, Detector, NudgeEncoder, RespondEncoder};
 use coop::pty::attach::{AttachSpec, TmuxBackend};
@@ -65,6 +66,23 @@ fn init_tracing(config: &Config) {
 async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
     let shutdown = CancellationToken::new();
 
+    // Handle --resume: discover session log and build resume state.
+    let resume_state = if let Some(ref resume_hint) = config.resume {
+        let log_path = resume::discover_session_log(resume_hint)?
+            .ok_or_else(|| anyhow::anyhow!("no session log found for: {resume_hint}"))?;
+        info!("resuming from session log: {}", log_path.display());
+        Some(resume::parse_resume_state(&log_path)?)
+    } else {
+        None
+    };
+
+    // If resuming, append --continue (and optionally --session-id) to the command.
+    let mut command = config.command.clone();
+    if let Some(ref state) = resume_state {
+        let extra = resume::resume_args(state);
+        command.extend(extra);
+    }
+
     // Build backend
     let backend: Box<dyn Backend> = if let Some(ref attach_spec) = config.attach {
         let spec: AttachSpec = attach_spec.parse()?;
@@ -75,10 +93,10 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
             }
         }
     } else {
-        if config.command.is_empty() {
+        if command.is_empty() {
             anyhow::bail!("no command specified");
         }
-        Box::new(NativePty::spawn(&config.command, config.cols, config.rows)?)
+        Box::new(NativePty::spawn(&command, config.cols, config.rows)?)
     };
 
     // Shared atomics created early so closures can reference them.
@@ -87,6 +105,7 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
 
     // Build driver (detectors + encoders)
     let agent_type_enum = config.agent_type_enum()?;
+    let log_start_offset = resume_state.as_ref().map(|s| s.log_offset).unwrap_or(0);
     let pid_for_driver = Arc::clone(&child_pid);
     let rtw_for_driver = Arc::clone(&ring_total_written);
     let (nudge_encoder, respond_encoder, detectors) = build_driver(
@@ -101,6 +120,7 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
             }
         }),
         Arc::new(move || rtw_for_driver.load(std::sync::atomic::Ordering::Relaxed)),
+        log_start_offset,
     )?;
 
     let idle_grace = Duration::from_secs(config.idle_grace);
@@ -129,6 +149,8 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         nudge_encoder,
         respond_encoder,
         shutdown: shutdown.clone(),
+        nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        ready: Arc::new(AtomicBool::new(false)),
         state_seq: AtomicU64::new(0),
         detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
         idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
@@ -264,6 +286,7 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         idle_grace,
         idle_timeout,
         shutdown,
+        skip_startup_prompts: config.effective_skip_startup_prompts(),
     });
 
     session.run().await
@@ -280,6 +303,7 @@ fn build_driver(
     agent_type: AgentType,
     child_pid_fn: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
     ring_total_written_fn: Arc<dyn Fn() -> u64 + Send + Sync>,
+    log_start_offset: u64,
 ) -> anyhow::Result<DriverComponents> {
     match agent_type {
         AgentType::Claude => {
@@ -287,6 +311,7 @@ fn build_driver(
                 session_log_path: None,
                 hook_pipe_path: None,
                 stdout_rx: None,
+                log_start_offset,
             })?;
             let nudge: Arc<dyn NudgeEncoder> = Arc::new(driver.nudge);
             let respond: Arc<dyn RespondEncoder> = Arc::new(driver.respond);

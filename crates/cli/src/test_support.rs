@@ -5,7 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -112,6 +112,8 @@ impl TestAppStateBuilder {
             nudge_encoder: self.nudge_encoder,
             respond_encoder: self.respond_encoder,
             shutdown: CancellationToken::new(),
+            nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            ready: Arc::new(AtomicBool::new(false)),
             state_seq: AtomicU64::new(0),
             detection_tier: AtomicU8::new(u8::MAX),
             idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),

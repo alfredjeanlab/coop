@@ -64,6 +64,8 @@ impl Detector for HookDetector {
 /// state to the composite detector.
 pub struct LogDetector {
     pub log_path: PathBuf,
+    /// Byte offset to start reading from (used for session resume).
+    pub start_offset: u64,
 }
 
 impl Detector for LogDetector {
@@ -73,7 +75,11 @@ impl Detector for LogDetector {
         shutdown: CancellationToken,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
-            let watcher = LogWatcher::new(self.log_path);
+            let watcher = if self.start_offset > 0 {
+                LogWatcher::with_offset(self.log_path, self.start_offset)
+            } else {
+                LogWatcher::new(self.log_path)
+            };
             let (line_tx, mut line_rx) = mpsc::channel(32);
             let watch_shutdown = shutdown.clone();
 

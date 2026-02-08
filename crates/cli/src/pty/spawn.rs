@@ -189,10 +189,23 @@ impl Backend for NativePty {
 
 impl Drop for NativePty {
     fn drop(&mut self) {
-        // Best-effort graceful shutdown: SIGHUP then SIGKILL.
-        let _ = kill(self.child_pid, Signal::SIGHUP);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let _ = kill(self.child_pid, Signal::SIGKILL);
+        // forkpty places the child in a new session (setsid), so the child PID
+        // equals the process group ID. Signal the entire group to clean up
+        // grandchildren as well.
+        let pgid = Pid::from_raw(-self.child_pid.as_raw());
+
+        // Best-effort graceful shutdown: SIGHUP to the process group.
+        let _ = kill(pgid, Signal::SIGHUP);
+
+        // Poll for exit up to 500ms before escalating to SIGKILL.
+        for _ in 0..10 {
+            match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::Exited(..)) | Ok(WaitStatus::Signaled(..)) => return,
+                _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+
+        let _ = kill(pgid, Signal::SIGKILL);
         let _ = waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG));
     }
 }

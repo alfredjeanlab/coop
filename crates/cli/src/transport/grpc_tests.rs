@@ -301,12 +301,15 @@ impl RespondEncoder for StubRespondEncoder {
 }
 
 fn mock_app_state_with_encoders(agent: AgentState) -> Arc<AppState> {
-    TestAppStateBuilder::new()
+    let (state, _rx) = TestAppStateBuilder::new()
         .agent_state(agent)
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .respond_encoder(Arc::new(StubRespondEncoder))
-        .build()
-        .0
+        .build();
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    state
 }
 
 #[tokio::test]

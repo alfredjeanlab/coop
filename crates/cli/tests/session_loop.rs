@@ -43,6 +43,7 @@ async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     let status = session.run().await?;
@@ -85,6 +86,7 @@ async fn session_input_roundtrip() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     let session_handle = tokio::spawn(async move { session.run().await });
@@ -136,6 +138,7 @@ async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown: sd,
+        skip_startup_prompts: false,
     });
 
     // Cancel after a short delay
@@ -172,6 +175,7 @@ async fn session_exited_state_broadcast() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     let _ = session.run().await?;
@@ -285,8 +289,28 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn http_nudge_returns_not_ready_before_startup() -> anyhow::Result<()> {
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
+    let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router)?;
+
+    let resp = server
+        .post("/api/v1/agent/nudge")
+        .json(&serde_json::json!({"message": "do something"}))
+        .await;
+
+    // Agent not ready yet -> NOT_READY error (503)
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
     let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
+    // Mark ready so the not-ready gate is passed
+    app_state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -376,6 +400,7 @@ async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     // Run session to completion

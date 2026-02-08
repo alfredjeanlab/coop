@@ -77,6 +77,15 @@ pub struct Config {
     #[arg(long, env = "COOP_LOG_LEVEL", default_value = "info")]
     pub log_level: String,
 
+    /// Auto-handle startup prompts (trust, permissions).
+    /// Default: true for --agent-type claude, false otherwise.
+    #[arg(long, env = "COOP_SKIP_STARTUP_PROMPTS")]
+    pub skip_startup_prompts: Option<bool>,
+
+    /// Resume a previous session from a log path or workspace ID.
+    #[arg(long, env = "COOP_RESUME")]
+    pub resume: Option<String>,
+
     /// Command to run (after --).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
@@ -113,6 +122,16 @@ impl Config {
         // Validate agent type
         self.agent_type_enum()?;
 
+        // --resume is only valid with --agent-type claude and cannot combine with --attach
+        if self.resume.is_some() {
+            if self.agent_type_enum()? != AgentType::Claude {
+                anyhow::bail!("--resume is only supported with --agent-type claude");
+            }
+            if self.attach.is_some() {
+                anyhow::bail!("--resume cannot be combined with --attach");
+            }
+        }
+
         Ok(())
     }
 
@@ -125,6 +144,16 @@ impl Config {
             "unknown" => Ok(AgentType::Unknown),
             other => anyhow::bail!("invalid agent type: {other}"),
         }
+    }
+
+    /// Resolve whether startup prompts should be auto-handled.
+    /// Defaults to `true` for Claude, `false` otherwise.
+    pub fn effective_skip_startup_prompts(&self) -> bool {
+        self.skip_startup_prompts.unwrap_or_else(|| {
+            self.agent_type_enum()
+                .map(|t| t == AgentType::Claude)
+                .unwrap_or(false)
+        })
     }
 }
 

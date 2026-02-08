@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use crate::driver::claude::startup::{detect_startup_prompt, encode_startup_response};
 use crate::driver::grace::IdleGraceTimer;
 use crate::driver::{AgentState, CompositeDetector, DetectedState, Detector, ExitStatus};
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
@@ -32,6 +33,8 @@ pub struct SessionConfig {
     pub idle_grace: Duration,
     pub idle_timeout: Duration,
     pub shutdown: CancellationToken,
+    /// Auto-handle startup prompts (trust, permissions, etc.).
+    pub skip_startup_prompts: bool,
 }
 
 /// Core session that runs the select-loop multiplexer.
@@ -45,6 +48,7 @@ pub struct Session {
     idle_timeout: Duration,
     shutdown: CancellationToken,
     backend_handle: JoinHandle<anyhow::Result<ExitStatus>>,
+    skip_startup_prompts: bool,
 }
 
 impl Session {
@@ -66,6 +70,7 @@ impl Session {
             idle_grace,
             idle_timeout,
             shutdown,
+            skip_startup_prompts,
         } = config;
         // Set initial PID
         if let Some(pid) = backend.child_pid() {
@@ -113,6 +118,7 @@ impl Session {
             idle_timeout,
             shutdown,
             backend_handle,
+            skip_startup_prompts,
         }
     }
 
@@ -121,6 +127,7 @@ impl Session {
         let mut screen_debounce = tokio::time::interval(Duration::from_millis(50));
         let mut state_seq: u64 = 0;
         let mut idle_since: Option<tokio::time::Instant> = None;
+        let mut startup_complete = false;
 
         loop {
             tokio::select! {
@@ -199,6 +206,16 @@ impl Session {
                         *current = detected.state.clone();
                         drop(current);
 
+                        // Mark ready on first transition away from Starting.
+                        if matches!(prev, AgentState::Starting)
+                            && !matches!(detected.state, AgentState::Starting)
+                        {
+                            self.app_state
+                                .ready
+                                .store(true, std::sync::atomic::Ordering::Release);
+                            startup_complete = true;
+                        }
+
                         // Store metadata for the HTTP/gRPC API.
                         self.app_state.state_seq.store(state_seq, std::sync::atomic::Ordering::Relaxed);
                         self.app_state.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Relaxed);
@@ -222,13 +239,37 @@ impl Session {
                     }
                 }
 
-                // 4. Screen debounce timer → broadcast ScreenUpdate if changed
+                // 4. Screen debounce timer → broadcast ScreenUpdate if changed,
+                //    and detect startup prompts when auto-handling is enabled.
                 _ = screen_debounce.tick() => {
                     let mut screen = self.app_state.screen.write().await;
-                    if screen.changed() {
+                    let changed = screen.changed();
+                    if changed {
                         let seq = screen.seq();
                         screen.clear_changed();
-                        drop(screen);
+
+                        // Detect and auto-respond to startup prompts while
+                        // the agent is still in the Starting phase.
+                        if self.skip_startup_prompts && !startup_complete {
+                            let snap = screen.snapshot();
+                            drop(screen);
+                            if let Some(prompt) = detect_startup_prompt(&snap.lines) {
+                                debug!(?prompt, "auto-handling startup prompt");
+                                let steps = encode_startup_response(prompt);
+                                for step in &steps {
+                                    let _ = self
+                                        .backend_input_tx
+                                        .send(Bytes::from(step.bytes.clone()))
+                                        .await;
+                                    if let Some(delay) = step.delay_after {
+                                        tokio::time::sleep(delay).await;
+                                    }
+                                }
+                            }
+                        } else {
+                            drop(screen);
+                        }
+
                         let _ = self.app_state.output_tx.send(OutputEvent::ScreenUpdate { seq });
                     }
                 }
@@ -248,10 +289,11 @@ impl Session {
                 // 6. Shutdown signal
                 _ = self.shutdown.cancelled() => {
                     debug!("shutdown signal received");
-                    // Send SIGHUP to child
+                    // Send SIGHUP to the process group (negative PID) to also
+                    // clean up grandchildren spawned by the agent.
                     let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
                     if pid != 0 {
-                        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGHUP);
+                        let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGHUP);
                     }
                     break;
                 }
@@ -280,7 +322,8 @@ impl Session {
                 warn!("backend did not exit within 10s, sending SIGKILL");
                 let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
                 if pid != 0 {
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                    // Signal the process group to also kill grandchildren.
+                    let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL);
                 }
                 ExitStatus { code: Some(137), signal: Some(9) }
             }

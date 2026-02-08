@@ -251,6 +251,7 @@ pub fn keys_to_bytes(keys: &[String]) -> Result<Vec<u8>, String> {
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/v1/health", get(http::health))
+        .route("/api/v1/ready", get(http::ready))
         .route("/api/v1/screen", get(http::screen))
         .route("/api/v1/screen/text", get(http::screen_text))
         .route("/api/v1/output", get(http::output))
@@ -274,6 +275,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 pub fn build_health_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/v1/health", get(http::health))
+        .route("/api/v1/ready", get(http::ready))
         .route("/api/v1/agent/state", get(http::agent_state))
         .with_state(state)
 }

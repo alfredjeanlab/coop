@@ -5,6 +5,8 @@ pub mod detect;
 pub mod encoding;
 pub mod hooks;
 pub mod prompt;
+pub mod resume;
+pub mod startup;
 pub mod state;
 
 use std::path::PathBuf;
@@ -26,6 +28,8 @@ pub struct ClaudeDriverConfig {
     /// Channel for raw stdout JSONL bytes (Tier 3).
     /// Used when Claude runs with `--print --output-format stream-json`.
     pub stdout_rx: Option<mpsc::Receiver<Bytes>>,
+    /// Byte offset to start reading the session log from (for resume).
+    pub log_start_offset: u64,
 }
 
 /// Claude Code agent driver.
@@ -59,7 +63,10 @@ impl ClaudeDriver {
 
         // Tier 2: Session log watching
         if let Some(log_path) = config.session_log_path {
-            detectors.push(Box::new(LogDetector { log_path }));
+            detectors.push(Box::new(LogDetector {
+                log_path,
+                start_offset: config.log_start_offset,
+            }));
         }
 
         // Tier 3: Structured stdout JSONL

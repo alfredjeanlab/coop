@@ -322,6 +322,10 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         request: Request<proto::NudgeRequest>,
     ) -> Result<Response<proto::NudgeResponse>, Status> {
+        if !self.state.ready.load(Ordering::Acquire) {
+            return Err(ErrorCode::NotReady.to_grpc_status("agent is still starting"));
+        }
+
         let req = request.into_inner();
 
         let encoder = self
@@ -354,6 +358,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         // Release the read lock before writing
         drop(agent);
 
+        let _delivery = self.state.nudge_mutex.lock().await;
         deliver_steps(&self.state.input_tx, steps)
             .await
             .map_err(|code| code.to_grpc_status("input channel closed"))?;
@@ -372,6 +377,10 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         request: Request<proto::RespondRequest>,
     ) -> Result<Response<proto::RespondResponse>, Status> {
+        if !self.state.ready.load(Ordering::Acquire) {
+            return Err(ErrorCode::NotReady.to_grpc_status("agent is still starting"));
+        }
+
         let req = request.into_inner();
 
         let encoder =
@@ -402,6 +411,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         // Release the read lock before writing
         drop(agent);
 
+        let _delivery = self.state.nudge_mutex.lock().await;
         deliver_steps(&self.state.input_tx, steps)
             .await
             .map_err(|code| code.to_grpc_status("input channel closed"))?;

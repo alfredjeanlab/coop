@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,13 @@ pub struct AppState {
     pub nudge_encoder: Option<Arc<dyn NudgeEncoder>>,
     pub respond_encoder: Option<Arc<dyn RespondEncoder>>,
     pub shutdown: CancellationToken,
+
+    /// Serializes multi-step nudge/respond delivery sequences.
+    /// The write lock gates *access* (single writer), while the nudge mutex
+    /// gates *delivery* (atomic multi-step sequences).
+    pub nudge_mutex: Arc<tokio::sync::Mutex<()>>,
+    /// Whether the agent has transitioned out of `Starting` and is ready.
+    pub ready: Arc<AtomicBool>,
 
     // Detection metadata
     pub state_seq: AtomicU64,

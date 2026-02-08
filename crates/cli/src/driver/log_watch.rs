@@ -20,6 +20,12 @@ impl LogWatcher {
         Self { path, offset: 0 }
     }
 
+    /// Create a watcher that starts reading from a specific byte offset.
+    /// Used for session resume to skip already-processed entries.
+    pub fn with_offset(path: PathBuf, offset: u64) -> Self {
+        Self { path, offset }
+    }
+
     /// Current byte offset into the log file.
     pub fn offset(&self) -> u64 {
         self.offset

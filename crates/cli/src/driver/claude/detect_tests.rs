@@ -23,6 +23,7 @@ async fn log_detector_parses_lines_and_emits_states() -> anyhow::Result<()> {
 
     let detector = Box::new(LogDetector {
         log_path: log_path.clone(),
+        start_offset: 0,
     });
     assert_eq!(detector.tier(), 2);
 
@@ -69,6 +70,7 @@ async fn log_detector_skips_non_assistant_lines() -> anyhow::Result<()> {
 
     let detector = Box::new(LogDetector {
         log_path: log_path.clone(),
+        start_offset: 0,
     });
     let (state_tx, mut state_rx) = mpsc::channel(32);
     let shutdown = CancellationToken::new();

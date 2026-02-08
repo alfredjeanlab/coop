@@ -34,6 +34,7 @@ pub struct HealthResponse {
     pub agent_type: String,
     pub terminal: TerminalSize,
     pub ws_clients: i32,
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -184,6 +185,7 @@ pub async fn health(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     let snap = s.screen.read().await.snapshot();
     let pid = s.child_pid.load(Ordering::Relaxed);
     let uptime = s.started_at.elapsed().as_secs() as i64;
+    let ready = s.ready.load(Ordering::Acquire);
 
     Json(HealthResponse {
         status: "running".to_owned(),
@@ -195,7 +197,25 @@ pub async fn health(State(s): State<Arc<AppState>>) -> impl IntoResponse {
             rows: snap.rows,
         },
         ws_clients: s.ws_client_count.load(Ordering::Relaxed),
+        ready,
     })
+}
+
+/// Response for the readiness probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadyResponse {
+    pub ready: bool,
+}
+
+/// `GET /api/v1/ready` — readiness probe (200 when ready, 503 otherwise).
+pub async fn ready(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let is_ready = s.ready.load(Ordering::Acquire);
+    let status = if is_ready {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(ReadyResponse { ready: is_ready }))
 }
 
 /// `GET /api/v1/screen`
@@ -425,6 +445,10 @@ pub async fn agent_nudge(
     State(s): State<Arc<AppState>>,
     Json(req): Json<NudgeRequest>,
 ) -> impl IntoResponse {
+    if !s.ready.load(Ordering::Acquire) {
+        return error_response(ErrorCode::NotReady, "agent is still starting").into_response();
+    }
+
     let encoder = match &s.nudge_encoder {
         Some(enc) => Arc::clone(enc),
         None => {
@@ -458,6 +482,7 @@ pub async fn agent_nudge(
     drop(agent);
 
     let steps = encoder.encode(&req.message);
+    let _delivery = s.nudge_mutex.lock().await;
     let _ = deliver_steps(&s.input_tx, steps).await;
 
     Json(NudgeResponse {
@@ -473,6 +498,10 @@ pub async fn agent_respond(
     State(s): State<Arc<AppState>>,
     Json(req): Json<RespondRequest>,
 ) -> impl IntoResponse {
+    if !s.ready.load(Ordering::Acquire) {
+        return error_response(ErrorCode::NotReady, "agent is still starting").into_response();
+    }
+
     let encoder = match &s.respond_encoder {
         Some(enc) => Arc::clone(enc),
         None => {
@@ -505,6 +534,7 @@ pub async fn agent_respond(
     };
 
     drop(agent);
+    let _delivery = s.nudge_mutex.lock().await;
     let _ = deliver_steps(&s.input_tx, steps).await;
 
     Json(RespondResponse {

@@ -415,6 +415,9 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
+            if !state.ready.load(Ordering::Acquire) {
+                return Some(ws_error(ErrorCode::NotReady, "agent is still starting"));
+            }
             if let Err(code) = state.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
@@ -431,6 +434,7 @@ async fn handle_client_message(
             }
             drop(agent);
             let steps = encoder.encode(&message);
+            let _delivery = state.nudge_mutex.lock().await;
             let _ = deliver_steps(&state.input_tx, steps).await;
             None
         }
@@ -442,6 +446,9 @@ async fn handle_client_message(
         } => {
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            if !state.ready.load(Ordering::Acquire) {
+                return Some(ws_error(ErrorCode::NotReady, "agent is still starting"));
             }
             if let Err(code) = state.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
@@ -459,6 +466,7 @@ async fn handle_client_message(
                     }
                 };
             drop(agent);
+            let _delivery = state.nudge_mutex.lock().await;
             let _ = deliver_steps(&state.input_tx, steps).await;
             None
         }

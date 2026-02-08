@@ -30,6 +30,7 @@ async fn echo_exits_with_zero() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     let status = session.run().await?;
@@ -56,6 +57,7 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown,
+        skip_startup_prompts: false,
     });
 
     let _ = session.run().await?;
@@ -99,6 +101,7 @@ async fn shutdown_cancels_session() -> anyhow::Result<()> {
         idle_grace: Duration::from_secs(60),
         idle_timeout: Duration::ZERO,
         shutdown: sd,
+        skip_startup_prompts: false,
     });
 
     // Cancel after a short delay

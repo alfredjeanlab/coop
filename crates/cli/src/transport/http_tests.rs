@@ -184,8 +184,26 @@ async fn agent_state_no_driver_404() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn agent_nudge_not_ready_503() -> anyhow::Result<()> {
+    let (state, _rx) = test_state();
+    // ready defaults to false — nudge should be gated
+    let app = build_router(state);
+    let server = axum_test::TestServer::new(app).anyhow()?;
+
+    let resp = server
+        .post("/api/v1/agent/nudge")
+        .json(&serde_json::json!({"message": "hello"}))
+        .await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    Ok(())
+}
+
+#[tokio::test]
 async fn agent_nudge_no_driver_404() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
     let app = build_router(state);
     let server = axum_test::TestServer::new(app).anyhow()?;
 
@@ -200,6 +218,9 @@ async fn agent_nudge_no_driver_404() -> anyhow::Result<()> {
 #[tokio::test]
 async fn agent_respond_no_driver_404() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
     let app = build_router(state);
     let server = axum_test::TestServer::new(app).anyhow()?;
 
@@ -276,6 +297,9 @@ async fn agent_nudge_rejected_when_working() -> anyhow::Result<()> {
         .agent_state(AgentState::Working)
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .build();
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
     let app = build_router(state);
     let server = axum_test::TestServer::new(app).anyhow()?;
 
@@ -297,6 +321,9 @@ async fn agent_nudge_delivered_when_waiting() -> anyhow::Result<()> {
         .agent_state(AgentState::WaitingForInput)
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .build();
+    state
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
     let app = build_router(state);
     let server = axum_test::TestServer::new(app).anyhow()?;
 
