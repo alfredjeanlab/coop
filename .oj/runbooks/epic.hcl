@@ -32,7 +32,7 @@ command "github:epic" {
     else
       url=$(gh issue create --label "$labels" --title "${args.title}")
     fi
-    gh issue lock "${url##*/}"
+    gh issue lock "$${url##*/}"
     oj worker start plan
     oj worker start epic
   SHELL
@@ -56,7 +56,7 @@ command "github:idea" {
     else
       url=$(gh issue create --label type:epic,plan:needed --title "${args.title}")
     fi
-    gh issue lock "${url##*/}"
+    gh issue lock "$${url##*/}"
     oj worker start plan
   SHELL
 
