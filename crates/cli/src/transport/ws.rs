@@ -335,6 +335,9 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
+            }
             let data = Bytes::from(text.into_bytes());
             let _ = state.input_tx.send(InputEvent::Write(data)).await;
             None
@@ -343,6 +346,9 @@ async fn handle_client_message(
         ClientMessage::InputRaw { data } => {
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
             }
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(&data)
@@ -357,6 +363,9 @@ async fn handle_client_message(
         ClientMessage::Keys { keys } => {
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
             }
             let data = keys_to_bytes(&keys);
             let _ = state
@@ -391,6 +400,9 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
+            }
             let encoder = match &state.nudge_encoder {
                 Some(enc) => Arc::clone(enc),
                 None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
@@ -415,6 +427,9 @@ async fn handle_client_message(
         } => {
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            if let Err(code) = state.write_lock.check_ws(client_id) {
+                return Some(ws_error(code, "write lock not held"));
             }
             let encoder = match &state.respond_encoder {
                 Some(enc) => Arc::clone(enc),

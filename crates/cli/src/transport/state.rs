@@ -164,6 +164,20 @@ impl WriteLock {
         }
     }
 
+    /// Check that the given WebSocket client currently holds the write lock.
+    /// Returns `WriterBusy` if the client does not hold the lock.
+    pub fn check_ws(&self, client_id: &str) -> Result<(), ErrorCode> {
+        let mut inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self::maybe_expire(&mut inner);
+        match &inner.owner {
+            Some(LockOwner::Ws(id)) if id == client_id => Ok(()),
+            _ => Err(ErrorCode::WriterBusy),
+        }
+    }
+
     /// Force-release the lock if held by the given WebSocket client.
     /// Used during connection cleanup.
     pub fn force_release_ws(&self, client_id: &str) {

@@ -123,3 +123,40 @@ fn ws_blocks_http() -> anyhow::Result<()> {
     assert_eq!(result.err(), Some(ErrorCode::WriterBusy));
     Ok(())
 }
+
+#[test]
+fn check_ws_owner_ok() -> anyhow::Result<()> {
+    let lock = WriteLock::new();
+    lock.acquire_ws("client-1")
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    lock.check_ws("client-1")
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+#[test]
+fn check_ws_wrong_owner() -> anyhow::Result<()> {
+    let lock = WriteLock::new();
+    lock.acquire_ws("client-1")
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let result = lock.check_ws("client-2");
+    assert_eq!(result.err(), Some(ErrorCode::WriterBusy));
+    Ok(())
+}
+
+#[test]
+fn check_ws_not_held() -> anyhow::Result<()> {
+    let lock = WriteLock::new();
+    let result = lock.check_ws("client-1");
+    assert_eq!(result.err(), Some(ErrorCode::WriterBusy));
+    Ok(())
+}
+
+#[test]
+fn check_ws_held_by_http() -> anyhow::Result<()> {
+    let lock = WriteLock::new();
+    let _guard = lock.acquire_http().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let result = lock.check_ws("client-1");
+    assert_eq!(result.err(), Some(ErrorCode::WriterBusy));
+    Ok(())
+}
