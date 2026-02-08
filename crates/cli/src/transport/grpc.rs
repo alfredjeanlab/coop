@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright 2025 Alfred Jean LLC
-
 //! gRPC transport implementing the `Coop` service defined in `coop.v1`.
 
 use std::pin::Pin;

@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright 2025 Alfred Jean LLC
-
 //! Integration tests for the session loop + HTTP transport, exercising
 //! the full stack in-process via `axum_test::TestServer`.
 

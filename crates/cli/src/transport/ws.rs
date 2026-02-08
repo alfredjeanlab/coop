@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-// SPDX-License-Identifier: BUSL-1.1
-// Copyright 2025 Alfred Jean LLC
-
 //! WebSocket message types and handler for the coop real-time protocol.
 //!
 //! Messages use internally-tagged JSON enums (`{"type": "input", ...}`) as
