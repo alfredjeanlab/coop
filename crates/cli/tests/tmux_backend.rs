@@ -58,7 +58,8 @@ async fn send_command_and_capture_output() -> anyhow::Result<()> {
     let (output_tx, mut output_rx) = mpsc::channel::<Bytes>(16);
     let (input_tx, input_rx) = mpsc::channel::<Bytes>(16);
 
-    let run_handle = tokio::spawn(async move { backend.run(output_tx, input_rx).await });
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
+    let run_handle = tokio::spawn(async move { backend.run(output_tx, input_rx, resize_rx).await });
 
     // Send a command
     input_tx.send(Bytes::from("echo hello\r")).await?;
@@ -121,7 +122,8 @@ async fn session_kill_resolves_run() -> anyhow::Result<()> {
     let (output_tx, _output_rx) = mpsc::channel::<Bytes>(16);
     let (_input_tx, input_rx) = mpsc::channel::<Bytes>(16);
 
-    let run_handle = tokio::spawn(async move { backend.run(output_tx, input_rx).await });
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
+    let run_handle = tokio::spawn(async move { backend.run(output_tx, input_rx, resize_rx).await });
 
     // Kill the session
     drop(session);

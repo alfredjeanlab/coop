@@ -20,6 +20,7 @@ pub trait Backend: Send + 'static {
         &mut self,
         output_tx: mpsc::Sender<Bytes>,
         input_rx: mpsc::Receiver<Bytes>,
+        resize_rx: mpsc::Receiver<(u16, u16)>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ExitStatus>> + Send + '_>>;
 
     fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()>;

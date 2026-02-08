@@ -12,12 +12,16 @@ use tokio::sync::mpsc;
 async fn spawn_and_capture() {
     let (output_tx, mut output_rx) = mpsc::channel(64);
     let (_input_tx, input_rx) = mpsc::channel(64);
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24).expect("spawn failed");
 
     assert!(pty.child_pid().is_some());
 
-    let status = pty.run(output_tx, input_rx).await.expect("run failed");
+    let status = pty
+        .run(output_tx, input_rx, resize_rx)
+        .await
+        .expect("run failed");
     assert_eq!(status.code, Some(0));
     assert_eq!(status.signal, None);
 
@@ -36,10 +40,11 @@ async fn spawn_and_capture() {
 async fn input_delivery() {
     let (output_tx, mut output_rx) = mpsc::channel(64);
     let (input_tx, input_rx) = mpsc::channel(64);
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty = NativePty::spawn(&["/bin/cat".into()], 80, 24).expect("spawn failed");
 
-    let handle = tokio::spawn(async move { pty.run(output_tx, input_rx).await });
+    let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
 
     // Write data with newline, then Ctrl-D on empty line to signal EOF
     input_tx
@@ -74,12 +79,73 @@ async fn resize_no_error() {
 }
 
 #[tokio::test]
+async fn resize_via_channel() -> anyhow::Result<()> {
+    let (output_tx, mut output_rx) = mpsc::channel(64);
+    let (_input_tx, input_rx) = mpsc::channel(64);
+    let (resize_tx, resize_rx) = mpsc::channel(4);
+
+    // stty size prints "<rows> <cols>\n" on the PTY
+    let mut pty = NativePty::spawn(
+        &[
+            "/bin/sh".into(),
+            "-c".into(),
+            // Wait for SIGWINCH, then query terminal size
+            "trap 'stty size' WINCH; sleep 5 & wait".into(),
+        ],
+        80,
+        24,
+    )?;
+
+    let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
+
+    // Give the shell time to set up the trap
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Send resize through the channel (like session would)
+    resize_tx.send((120, 40)).await?;
+
+    // Collect output until we see the expected dimensions or timeout
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut output = Vec::new();
+    loop {
+        tokio::select! {
+            chunk = output_rx.recv() => {
+                match chunk {
+                    Some(data) => output.extend_from_slice(&data),
+                    None => break,
+                }
+                let text = String::from_utf8_lossy(&output);
+                if text.contains("40 120") {
+                    break;
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                break;
+            }
+        }
+    }
+
+    // Clean up
+    drop(resize_tx);
+    drop(_input_tx);
+    handle.abort();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("40 120"),
+        "expected '40 120' (rows cols) in output: {text:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn screen_integration() {
     let (output_tx, mut output_rx) = mpsc::channel(64);
     let (_input_tx, input_rx) = mpsc::channel(64);
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24).expect("spawn failed");
-    let _ = pty.run(output_tx, input_rx).await;
+    let _ = pty.run(output_tx, input_rx, resize_rx).await;
 
     let mut screen = Screen::new(80, 24);
     while let Ok(chunk) = output_rx.try_recv() {
@@ -98,9 +164,10 @@ async fn screen_integration() {
 async fn ring_buffer_integration() {
     let (output_tx, mut output_rx) = mpsc::channel(64);
     let (_input_tx, input_rx) = mpsc::channel(64);
+    let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24).expect("spawn failed");
-    let _ = pty.run(output_tx, input_rx).await;
+    let _ = pty.run(output_tx, input_rx, resize_rx).await;
 
     let mut ring = RingBuffer::new(4096);
     while let Ok(chunk) = output_rx.try_recv() {

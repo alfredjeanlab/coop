@@ -86,6 +86,7 @@ impl Backend for TmuxBackend {
         &mut self,
         output_tx: mpsc::Sender<Bytes>,
         mut input_rx: mpsc::Receiver<Bytes>,
+        mut resize_rx: mpsc::Receiver<(u16, u16)>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ExitStatus>> + Send + '_>> {
         Box::pin(async move {
             let mut interval = tokio::time::interval(self.poll_interval);
@@ -148,6 +149,20 @@ impl Backend for TmuxBackend {
                                     signal: None,
                                 });
                             }
+                        }
+                    }
+                    resize = resize_rx.recv() => {
+                        if let Some((cols, rows)) = resize {
+                            let _ = tokio::process::Command::new("tmux")
+                                .args([
+                                    "resize-pane", "-t", &self.target,
+                                    "-x", &cols.to_string(),
+                                    "-y", &rows.to_string(),
+                                ])
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .status()
+                                .await;
                         }
                     }
                 }

@@ -84,6 +84,7 @@ impl Backend for NativePty {
         &mut self,
         output_tx: mpsc::Sender<Bytes>,
         mut input_rx: mpsc::Receiver<Bytes>,
+        mut resize_rx: mpsc::Receiver<(u16, u16)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<ExitStatus>> + Send + '_>>
     {
         let pid = self.child_pid;
@@ -93,17 +94,26 @@ impl Backend for NativePty {
 
             loop {
                 if input_closed {
-                    // Only read output once input is closed
-                    match read_chunk(&self.master, &mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let data = Bytes::copy_from_slice(&buf[..n]);
-                            if output_tx.send(data).await.is_err() {
-                                break;
+                    // Read output + handle resize once input is closed
+                    tokio::select! {
+                        result = read_chunk(&self.master, &mut buf) => {
+                            match result {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    let data = Bytes::copy_from_slice(&buf[..n]);
+                                    if output_tx.send(data).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
+                                Err(e) => return Err(e.into()),
                             }
                         }
-                        Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
-                        Err(e) => return Err(e.into()),
+                        resize = resize_rx.recv() => {
+                            if let Some((cols, rows)) = resize {
+                                let _ = self.resize(cols, rows);
+                            }
+                        }
                     }
                 } else {
                     tokio::select! {
@@ -126,6 +136,11 @@ impl Backend for NativePty {
                                     write_all(&self.master, &data).await?;
                                 }
                                 None => input_closed = true,
+                            }
+                        }
+                        resize = resize_rx.recv() => {
+                            if let Some((cols, rows)) = resize {
+                                let _ = self.resize(cols, rows);
                             }
                         }
                     }

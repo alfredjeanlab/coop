@@ -36,6 +36,7 @@ pub struct Session {
     app_state: Arc<AppState>,
     backend_output_rx: mpsc::Receiver<Bytes>,
     backend_input_tx: mpsc::Sender<Bytes>,
+    resize_tx: mpsc::Sender<(u16, u16)>,
     consumer_input_rx: mpsc::Receiver<InputEvent>,
     detector_rx: mpsc::Receiver<AgentState>,
     shutdown: CancellationToken,
@@ -73,10 +74,14 @@ impl Session {
         // Create backend I/O channels
         let (backend_output_tx, backend_output_rx) = mpsc::channel(256);
         let (backend_input_tx, backend_input_rx) = mpsc::channel(256);
+        let (resize_tx, resize_rx) = mpsc::channel(4);
 
         // Spawn backend task
-        let backend_handle =
-            tokio::spawn(async move { backend.run(backend_output_tx, backend_input_rx).await });
+        let backend_handle = tokio::spawn(async move {
+            backend
+                .run(backend_output_tx, backend_input_rx, resize_rx)
+                .await
+        });
 
         // Create detector aggregation channel
         let (detector_tx, detector_rx) = mpsc::channel(64);
@@ -93,6 +98,7 @@ impl Session {
             app_state,
             backend_output_rx,
             backend_input_tx,
+            resize_tx,
             consumer_input_rx,
             detector_rx,
             shutdown,
@@ -148,13 +154,9 @@ impl Session {
                                 let mut screen = self.app_state.screen.write().await;
                                 screen.resize(cols, rows);
                             }
-                            // We can't call backend.resize() since it's moved into the task.
-                            // The resize will be handled via TIOCSWINSZ by the PTY fd owner.
-                            // For now, send a SIGWINCH to the child process.
-                            let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
-                            if pid != 0 {
-                                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGWINCH);
-                            }
+                            // Send resize to backend task which calls TIOCSWINSZ on the
+                            // PTY fd (the ioctl also delivers SIGWINCH to the child).
+                            let _ = self.resize_tx.send((cols, rows)).await;
                         }
                         Some(InputEvent::Signal(sig)) => {
                             let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
