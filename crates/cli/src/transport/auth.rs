@@ -12,6 +12,20 @@ use crate::error::ErrorCode;
 use crate::transport::state::AppState;
 use crate::transport::ErrorResponse;
 
+/// Constant-time string comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut acc = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
 /// Validate a Bearer token from HTTP headers.
 ///
 /// Returns `Ok(())` when `expected` is `None` (auth disabled) or when the
@@ -30,7 +44,7 @@ pub fn validate_bearer(headers: &HeaderMap, expected: Option<&str>) -> Result<()
     let token = header
         .strip_prefix("Bearer ")
         .ok_or(ErrorCode::Unauthorized)?;
-    if token == expected {
+    if constant_time_eq(token, expected) {
         Ok(())
     } else {
         Err(ErrorCode::Unauthorized)
@@ -49,7 +63,7 @@ pub fn validate_ws_query(query: &str, expected: Option<&str>) -> Result<(), Erro
 
     for pair in query.split('&') {
         if let Some(value) = pair.strip_prefix("token=") {
-            if value == expected {
+            if constant_time_eq(value, expected) {
                 return Ok(());
             }
         }
@@ -62,7 +76,7 @@ pub fn validate_ws_query(query: &str, expected: Option<&str>) -> Result<(), Erro
 pub fn validate_ws_auth(token: &str, expected: Option<&str>) -> Result<(), ErrorCode> {
     match expected {
         None => Ok(()),
-        Some(tok) if tok == token => Ok(()),
+        Some(tok) if constant_time_eq(tok, token) => Ok(()),
         Some(_) => Err(ErrorCode::Unauthorized),
     }
 }
