@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use crate::transport::ws::{ClientMessage, LockAction, ServerMessage, SubscriptionMode};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
+
+use crate::driver::{AgentState, NudgeEncoder, NudgeStep};
+use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
+use crate::ring::RingBuffer;
+use crate::screen::Screen;
+use crate::transport::state::{AppState, WriteLock};
+use crate::transport::ws::{
+    handle_client_message, ClientMessage, LockAction, ServerMessage, SubscriptionMode,
+};
 
 #[test]
 fn ping_pong_serialization() -> anyhow::Result<()> {
@@ -156,5 +170,119 @@ fn client_message_roundtrip() -> anyhow::Result<()> {
         let _msg: ClientMessage = serde_json::from_str(json)
             .map_err(|e| anyhow::anyhow!("failed to parse '{json}': {e}"))?;
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests using handle_client_message
+// ---------------------------------------------------------------------------
+
+struct StubNudgeEncoder;
+impl NudgeEncoder for StubNudgeEncoder {
+    fn encode(&self, message: &str) -> Vec<NudgeStep> {
+        vec![NudgeStep {
+            bytes: message.as_bytes().to_vec(),
+            delay_after: None,
+        }]
+    }
+}
+
+fn ws_test_state(agent: AgentState) -> (AppState, mpsc::Receiver<InputEvent>) {
+    let (input_tx, input_rx) = mpsc::channel(16);
+    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
+    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
+
+    let state = AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
+        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
+        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
+        agent_state: Arc::new(RwLock::new(agent)),
+        input_tx,
+        output_tx,
+        state_tx,
+        child_pid: Arc::new(AtomicU32::new(1234)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: None,
+        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
+        respond_encoder: None,
+        shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
+    };
+
+    (state, input_rx)
+}
+
+#[tokio::test]
+async fn resize_zero_cols_returns_error() -> anyhow::Result<()> {
+    let (state, _rx) = ws_test_state(AgentState::Working);
+    let msg = ClientMessage::Resize { cols: 0, rows: 24 };
+    let reply = handle_client_message(&state, msg, "test-client", &mut true).await;
+    match reply {
+        Some(ServerMessage::Error { code, .. }) => {
+            assert_eq!(code, "BAD_REQUEST");
+        }
+        other => anyhow::bail!("expected Error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resize_zero_rows_returns_error() -> anyhow::Result<()> {
+    let (state, _rx) = ws_test_state(AgentState::Working);
+    let msg = ClientMessage::Resize { cols: 80, rows: 0 };
+    let reply = handle_client_message(&state, msg, "test-client", &mut true).await;
+    match reply {
+        Some(ServerMessage::Error { code, .. }) => {
+            assert_eq!(code, "BAD_REQUEST");
+        }
+        other => anyhow::bail!("expected Error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
+    let (state, _rx) = ws_test_state(AgentState::Working);
+    let client_id = "test-ws";
+    state
+        .write_lock
+        .acquire_ws(client_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let msg = ClientMessage::Nudge {
+        message: "hello".to_owned(),
+    };
+    let reply = handle_client_message(&state, msg, client_id, &mut true).await;
+    match reply {
+        Some(ServerMessage::Error { code, .. }) => {
+            assert_eq!(code, "AGENT_BUSY");
+        }
+        other => anyhow::bail!("expected AgentBusy error, got {other:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn nudge_accepted_when_agent_waiting() -> anyhow::Result<()> {
+    let (state, _rx) = ws_test_state(AgentState::WaitingForInput);
+    let client_id = "test-ws";
+    state
+        .write_lock
+        .acquire_ws(client_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let msg = ClientMessage::Nudge {
+        message: "hello".to_owned(),
+    };
+    let reply = handle_client_message(&state, msg, client_id, &mut true).await;
+    assert!(reply.is_none(), "expected None (success), got {reply:?}");
     Ok(())
 }

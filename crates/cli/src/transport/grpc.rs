@@ -326,14 +326,21 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::NudgeRequest>,
     ) -> Result<Response<proto::NudgeResponse>, Status> {
         let req = request.into_inner();
-        let agent = self.state.agent_state.read().await;
-        let state_before = agent.as_str().to_owned();
 
         let encoder = self
             .state
             .nudge_encoder
             .as_ref()
             .ok_or_else(|| ErrorCode::NoDriver.to_grpc_status("no nudge encoder configured"))?;
+
+        let _guard = self
+            .state
+            .write_lock
+            .acquire_http()
+            .map_err(|code| code.to_grpc_status("write lock held by another client"))?;
+
+        let agent = self.state.agent_state.read().await;
+        let state_before = agent.as_str().to_owned();
 
         match &*agent {
             AgentState::WaitingForInput => {}
@@ -376,12 +383,19 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::RespondRequest>,
     ) -> Result<Response<proto::RespondResponse>, Status> {
         let req = request.into_inner();
-        let agent = self.state.agent_state.read().await;
 
         let encoder =
             self.state.respond_encoder.as_ref().ok_or_else(|| {
                 ErrorCode::NoDriver.to_grpc_status("no respond encoder configured")
             })?;
+
+        let _guard = self
+            .state
+            .write_lock
+            .acquire_http()
+            .map_err(|code| code.to_grpc_status("write lock held by another client"))?;
+
+        let agent = self.state.agent_state.read().await;
 
         let steps = match &*agent {
             AgentState::PermissionPrompt { .. } => {

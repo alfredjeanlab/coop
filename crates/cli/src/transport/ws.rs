@@ -376,6 +376,12 @@ async fn handle_client_message(
         }
 
         ClientMessage::Resize { cols, rows } => {
+            if cols == 0 || rows == 0 {
+                return Some(ws_error(
+                    ErrorCode::BadRequest,
+                    "cols and rows must be positive",
+                ));
+            }
             let _ = state.input_tx.send(InputEvent::Resize { cols, rows }).await;
             None
         }
@@ -407,6 +413,14 @@ async fn handle_client_message(
                 Some(enc) => Arc::clone(enc),
                 None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
             };
+            let agent = state.agent_state.read().await;
+            if !matches!(&*agent, AgentState::WaitingForInput) {
+                return Some(ws_error(
+                    ErrorCode::AgentBusy,
+                    "agent is not waiting for input",
+                ));
+            }
+            drop(agent);
             let steps = encoder.encode(&message);
             for step in &steps {
                 let _ = state

@@ -394,3 +394,31 @@ async fn agent_nudge_delivered_when_waiting() -> anyhow::Result<()> {
     assert!(body.contains("\"delivered\":true"));
     Ok(())
 }
+
+#[tokio::test]
+async fn resize_rejects_zero_cols() -> anyhow::Result<()> {
+    let (state, _rx) = test_state();
+    let app = build_router(state);
+    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let resp = server
+        .post("/api/v1/resize")
+        .json(&serde_json::json!({"cols": 0, "rows": 24}))
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resize_rejects_zero_rows() -> anyhow::Result<()> {
+    let (state, _rx) = test_state();
+    let app = build_router(state);
+    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let resp = server
+        .post("/api/v1/resize")
+        .json(&serde_json::json!({"cols": 80, "rows": 0}))
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    Ok(())
+}

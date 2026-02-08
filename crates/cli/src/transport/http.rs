@@ -333,6 +333,11 @@ pub async fn resize(
     State(s): State<Arc<AppState>>,
     Json(req): Json<ResizeRequest>,
 ) -> impl IntoResponse {
+    if req.cols == 0 || req.rows == 0 {
+        return error_response(ErrorCode::BadRequest, "cols and rows must be positive")
+            .into_response();
+    }
+
     let _ = s
         .input_tx
         .send(InputEvent::Resize {
@@ -345,6 +350,7 @@ pub async fn resize(
         cols: req.cols,
         rows: req.rows,
     })
+    .into_response()
 }
 
 /// `POST /api/v1/signal`

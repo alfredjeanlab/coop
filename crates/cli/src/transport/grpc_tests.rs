@@ -297,3 +297,128 @@ fn service_instantiation_compiles() {
     // Verify we can construct a tonic server from the service
     let _router = service.into_router();
 }
+
+// ---------------------------------------------------------------------------
+// Write lock tests for nudge/respond
+// ---------------------------------------------------------------------------
+
+use crate::driver::{NudgeEncoder, NudgeStep, RespondEncoder};
+use tonic::Code;
+
+struct StubNudgeEncoder;
+impl NudgeEncoder for StubNudgeEncoder {
+    fn encode(&self, message: &str) -> Vec<NudgeStep> {
+        vec![NudgeStep {
+            bytes: message.as_bytes().to_vec(),
+            delay_after: None,
+        }]
+    }
+}
+
+struct StubRespondEncoder;
+impl RespondEncoder for StubRespondEncoder {
+    fn encode_permission(&self, accept: bool) -> Vec<NudgeStep> {
+        let text = if accept { "y" } else { "n" };
+        vec![NudgeStep {
+            bytes: text.as_bytes().to_vec(),
+            delay_after: None,
+        }]
+    }
+    fn encode_plan(&self, accept: bool, _text: Option<&str>) -> Vec<NudgeStep> {
+        self.encode_permission(accept)
+    }
+    fn encode_question(&self, _option: Option<u32>, text: Option<&str>) -> Vec<NudgeStep> {
+        let t = text.unwrap_or("1");
+        vec![NudgeStep {
+            bytes: t.as_bytes().to_vec(),
+            delay_after: None,
+        }]
+    }
+}
+
+fn mock_app_state_with_encoders(agent: AgentState) -> Arc<AppState> {
+    let (input_tx, _input_rx) = mpsc::channel(16);
+    let (output_tx, _) = broadcast::channel(16);
+    let (state_tx, _) = broadcast::channel(16);
+
+    Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
+        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
+        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
+        agent_state: Arc::new(RwLock::new(agent)),
+        input_tx,
+        output_tx,
+        state_tx,
+        child_pid: Arc::new(AtomicU32::new(0)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: None,
+        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
+        respond_encoder: Some(Arc::new(StubRespondEncoder)),
+        shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
+    })
+}
+
+#[tokio::test]
+async fn nudge_fails_when_write_lock_held() -> anyhow::Result<()> {
+    use proto::coop_server::Coop;
+
+    let state = mock_app_state_with_encoders(AgentState::WaitingForInput);
+    // Simulate another client holding the write lock
+    state
+        .write_lock
+        .acquire_ws("other-client")
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let service = CoopGrpc::new(state);
+    let req = Request::new(proto::NudgeRequest {
+        message: "hello".to_owned(),
+    });
+    let result = service.nudge(req).await;
+    let err = result
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected error"))?;
+    assert_eq!(err.code(), Code::ResourceExhausted);
+    Ok(())
+}
+
+#[tokio::test]
+async fn respond_fails_when_write_lock_held() -> anyhow::Result<()> {
+    use proto::coop_server::Coop;
+
+    let prompt = crate::driver::PromptContext {
+        prompt_type: "permission".to_owned(),
+        tool: None,
+        input_preview: None,
+        question: None,
+        options: vec![],
+        summary: None,
+        screen_lines: vec![],
+    };
+    let state = mock_app_state_with_encoders(AgentState::PermissionPrompt { prompt });
+    state
+        .write_lock
+        .acquire_ws("other-client")
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let service = CoopGrpc::new(state);
+    let req = Request::new(proto::RespondRequest {
+        accept: Some(true),
+        option: None,
+        text: None,
+    });
+    let result = service.respond(req).await;
+    let err = result
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected error"))?;
+    assert_eq!(err.code(), Code::ResourceExhausted);
+    Ok(())
+}
