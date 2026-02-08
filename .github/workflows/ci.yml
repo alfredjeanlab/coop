@@ -100,3 +100,19 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Smoke test
         run: docker run --rm coop:ci --help
+
+  gate:
+    name: CI
+    if: always()
+    needs: [fmt, clippy, quench, test, audit, deny, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "One or more jobs failed: $results"
+              exit 1
+            fi
+          done
