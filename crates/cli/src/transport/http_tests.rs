@@ -66,7 +66,7 @@ async fn screen_text_plain() -> anyhow::Result<()> {
 async fn output_with_offset() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     {
-        let mut ring = state.ring.write().await;
+        let mut ring = state.terminal.ring.write().await;
         ring.write(b"hello world");
     }
     let app = build_router(state);
@@ -155,7 +155,10 @@ async fn signal_delivers() -> anyhow::Result<()> {
     assert!(body.contains("\"delivered\":true"));
 
     let event = rx.recv().await;
-    assert!(matches!(event, Some(InputEvent::Signal(2))));
+    assert!(matches!(
+        event,
+        Some(InputEvent::Signal(crate::event::PtySignal::Int))
+    ));
     Ok(())
 }
 
@@ -236,7 +239,11 @@ async fn agent_respond_no_driver_404() -> anyhow::Result<()> {
 async fn write_endpoint_conflict_409() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     // Pre-acquire the write lock via WS
-    state.write_lock.acquire_ws("other-client").anyhow()?;
+    state
+        .lifecycle
+        .write_lock
+        .acquire_ws("other-client")
+        .anyhow()?;
 
     let app = build_router(state);
     let server = axum_test::TestServer::new(app).anyhow()?;

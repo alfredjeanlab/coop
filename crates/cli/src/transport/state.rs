@@ -8,53 +8,92 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::{AgentState, ExitStatus, NudgeEncoder, RespondEncoder};
+use crate::driver::{AgentState, AgentType, ExitStatus, NudgeEncoder, RespondEncoder};
 use crate::error::ErrorCode;
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::ring::RingBuffer;
 use crate::screen::Screen;
 
 /// Shared application state passed to all handlers via axum `State` extractor.
+///
+/// Organized into focused sub-structs by concern:
+/// - `terminal`: screen, ring buffer, child process
+/// - `driver`: agent detection state
+/// - `channels`: channel endpoints for session ↔ transport communication
+/// - `config`: static session settings
+/// - `lifecycle`: runtime lifecycle primitives
 pub struct AppState {
-    pub started_at: Instant,
-    pub agent_type: String,
-    pub screen: Arc<RwLock<Screen>>,
-    pub ring: Arc<RwLock<RingBuffer>>,
-    pub agent_state: Arc<RwLock<AgentState>>,
-    pub input_tx: mpsc::Sender<InputEvent>,
-    pub output_tx: broadcast::Sender<OutputEvent>,
-    pub state_tx: broadcast::Sender<StateChangeEvent>,
-    pub child_pid: Arc<AtomicU32>,
-    pub exit_status: Arc<RwLock<Option<ExitStatus>>>,
-    pub write_lock: Arc<WriteLock>,
-    pub ws_client_count: Arc<AtomicI32>,
-    pub bytes_written: AtomicU64,
-    pub auth_token: Option<String>,
-    pub nudge_encoder: Option<Arc<dyn NudgeEncoder>>,
-    pub respond_encoder: Option<Arc<dyn RespondEncoder>>,
-    pub shutdown: CancellationToken,
+    pub terminal: Arc<TerminalState>,
+    pub driver: Arc<DriverState>,
+    pub channels: TransportChannels,
+    pub config: SessionSettings,
+    pub lifecycle: LifecycleState,
 
+    /// Whether the agent has transitioned out of `Starting` and is ready.
+    pub ready: Arc<AtomicBool>,
     /// Serializes multi-step nudge/respond delivery sequences.
     /// The write lock gates *access* (single writer), while the nudge mutex
     /// gates *delivery* (atomic multi-step sequences).
     pub nudge_mutex: Arc<tokio::sync::Mutex<()>>,
-    /// Whether the agent has transitioned out of `Starting` and is ready.
-    pub ready: Arc<AtomicBool>,
+}
 
-    // Detection metadata
+/// Terminal I/O: screen, ring buffer, child process.
+pub struct TerminalState {
+    pub screen: RwLock<Screen>,
+    pub ring: RwLock<RingBuffer>,
+    /// Lock-free mirror of `ring.total_written()` updated by the session loop.
+    ///
+    /// Arc-wrapped so the session loop can hand a cheap clone to the
+    /// [`CompositeDetector`] activity callback without holding a reference
+    /// to the entire `TerminalState`.
+    pub ring_total_written: Arc<AtomicU64>,
+    pub child_pid: AtomicU32,
+    /// ORDERING: must be written before `DriverState.agent_state` is set to
+    /// `Exited` so readers who see the exited state always find this populated.
+    pub exit_status: RwLock<Option<ExitStatus>>,
+}
+
+/// Driver detection state.
+pub struct DriverState {
+    pub agent_state: RwLock<AgentState>,
     pub state_seq: AtomicU64,
     pub detection_tier: AtomicU8,
+    /// Arc-wrapped so the session loop can pass a cheap clone to
+    /// [`CompositeDetector::run`] without holding a reference to the
+    /// entire `DriverState`.
     pub idle_grace_deadline: Arc<Mutex<Option<Instant>>>,
+}
+
+/// Channel endpoints for consumer ↔ session communication.
+pub struct TransportChannels {
+    pub input_tx: mpsc::Sender<InputEvent>,
+    pub output_tx: broadcast::Sender<OutputEvent>,
+    pub state_tx: broadcast::Sender<StateChangeEvent>,
+}
+
+/// Static session configuration (immutable after construction).
+pub struct SessionSettings {
+    pub started_at: Instant,
+    pub agent_type: AgentType,
+    pub auth_token: Option<String>,
+    pub nudge_encoder: Option<Arc<dyn NudgeEncoder>>,
+    pub respond_encoder: Option<Arc<dyn RespondEncoder>>,
     pub idle_grace_duration: Duration,
-    /// Lock-free mirror of `ring.total_written()` updated by the session loop.
-    pub ring_total_written: Arc<AtomicU64>,
+}
+
+/// Runtime lifecycle primitives.
+pub struct LifecycleState {
+    pub shutdown: CancellationToken,
+    pub write_lock: Arc<WriteLock>,
+    pub ws_client_count: AtomicI32,
+    pub bytes_written: AtomicU64,
 }
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
-            .field("agent_type", &self.agent_type)
-            .field("auth_token", &self.auth_token.is_some())
+            .field("agent_type", &self.config.agent_type)
+            .field("auth_token", &self.config.auth_token.is_some())
             .finish()
     }
 }

@@ -16,10 +16,11 @@ use serde::{Deserialize, Serialize};
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
 use crate::event::InputEvent;
+use crate::event::PtySignal;
 use crate::screen::CursorPosition;
 use crate::transport::state::AppState;
 use crate::transport::{
-    deliver_steps, encode_response, error_response, keys_to_bytes, parse_signal, read_ring_combined,
+    deliver_steps, encode_response, error_response, keys_to_bytes, read_ring_combined,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,21 +183,21 @@ pub struct RespondResponse {
 
 /// `GET /api/v1/health`
 pub async fn health(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    let snap = s.screen.read().await.snapshot();
-    let pid = s.child_pid.load(Ordering::Relaxed);
-    let uptime = s.started_at.elapsed().as_secs() as i64;
+    let snap = s.terminal.screen.read().await.snapshot();
+    let pid = s.terminal.child_pid.load(Ordering::Relaxed);
+    let uptime = s.config.started_at.elapsed().as_secs() as i64;
     let ready = s.ready.load(Ordering::Acquire);
 
     Json(HealthResponse {
         status: "running".to_owned(),
         pid: if pid == 0 { None } else { Some(pid as i32) },
         uptime_secs: uptime,
-        agent_type: s.agent_type.clone(),
+        agent_type: s.config.agent_type.to_string(),
         terminal: TerminalSize {
             cols: snap.cols,
             rows: snap.rows,
         },
-        ws_clients: s.ws_client_count.load(Ordering::Relaxed),
+        ws_clients: s.lifecycle.ws_client_count.load(Ordering::Relaxed),
         ready,
     })
 }
@@ -223,7 +224,7 @@ pub async fn screen(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ScreenQuery>,
 ) -> impl IntoResponse {
-    let snap = s.screen.read().await.snapshot();
+    let snap = s.terminal.screen.read().await.snapshot();
 
     Json(ScreenResponse {
         lines: snap.lines,
@@ -237,7 +238,7 @@ pub async fn screen(
 
 /// `GET /api/v1/screen/text`
 pub async fn screen_text(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    let snap = s.screen.read().await.snapshot();
+    let snap = s.terminal.screen.read().await.snapshot();
     let text = snap.lines.join("\n");
     (
         [(
@@ -253,7 +254,7 @@ pub async fn output(
     State(s): State<Arc<AppState>>,
     Query(q): Query<OutputQuery>,
 ) -> impl IntoResponse {
-    let ring = s.ring.read().await;
+    let ring = s.terminal.ring.read().await;
     let total = ring.total_written();
 
     let mut combined = read_ring_combined(&ring, q.offset);
@@ -275,12 +276,12 @@ pub async fn output(
 
 /// `GET /api/v1/status`
 pub async fn status(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    let agent = s.agent_state.read().await;
-    let ring = s.ring.read().await;
-    let screen = s.screen.read().await;
-    let pid = s.child_pid.load(Ordering::Relaxed);
-    let exit = s.exit_status.read().await;
-    let bw = s.bytes_written.load(Ordering::Relaxed);
+    let agent = s.driver.agent_state.read().await;
+    let ring = s.terminal.ring.read().await;
+    let screen = s.terminal.screen.read().await;
+    let pid = s.terminal.child_pid.load(Ordering::Relaxed);
+    let exit = s.terminal.exit_status.read().await;
+    let bw = s.lifecycle.bytes_written.load(Ordering::Relaxed);
 
     let state_str = match &*agent {
         AgentState::Exited { .. } => "exited",
@@ -300,7 +301,7 @@ pub async fn status(State(s): State<Arc<AppState>>) -> impl IntoResponse {
         screen_seq: screen.seq(),
         bytes_read: ring.total_written(),
         bytes_written: bw,
-        ws_clients: s.ws_client_count.load(Ordering::Relaxed),
+        ws_clients: s.lifecycle.ws_client_count.load(Ordering::Relaxed),
     })
 }
 
@@ -309,7 +310,7 @@ pub async fn input(
     State(s): State<Arc<AppState>>,
     Json(req): Json<InputRequest>,
 ) -> impl IntoResponse {
-    let _guard = match s.write_lock.acquire_http() {
+    let _guard = match s.lifecycle.write_lock.acquire_http() {
         Ok(g) => g,
         Err(code) => {
             return error_response(code, "write lock held by another client").into_response()
@@ -321,7 +322,11 @@ pub async fn input(
         data.push(b'\r');
     }
     let len = data.len() as i32;
-    let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;
+    let _ = s
+        .channels
+        .input_tx
+        .send(InputEvent::Write(Bytes::from(data)))
+        .await;
 
     Json(InputResponse { bytes_written: len }).into_response()
 }
@@ -331,7 +336,7 @@ pub async fn input_keys(
     State(s): State<Arc<AppState>>,
     Json(req): Json<KeysRequest>,
 ) -> impl IntoResponse {
-    let _guard = match s.write_lock.acquire_http() {
+    let _guard = match s.lifecycle.write_lock.acquire_http() {
         Ok(g) => g,
         Err(code) => {
             return error_response(code, "write lock held by another client").into_response()
@@ -346,7 +351,11 @@ pub async fn input_keys(
         }
     };
     let len = data.len() as i32;
-    let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;
+    let _ = s
+        .channels
+        .input_tx
+        .send(InputEvent::Write(Bytes::from(data)))
+        .await;
 
     Json(KeysResponse { bytes_written: len }).into_response()
 }
@@ -362,6 +371,7 @@ pub async fn resize(
     }
 
     let _ = s
+        .channels
         .input_tx
         .send(InputEvent::Resize {
             cols: req.cols,
@@ -381,8 +391,8 @@ pub async fn signal(
     State(s): State<Arc<AppState>>,
     Json(req): Json<SignalRequest>,
 ) -> impl IntoResponse {
-    let signum = match parse_signal(&req.signal) {
-        Some(n) => n,
+    let sig = match PtySignal::from_name(&req.signal) {
+        Some(s) => s,
         None => {
             return error_response(
                 ErrorCode::BadRequest,
@@ -392,21 +402,21 @@ pub async fn signal(
         }
     };
 
-    let _ = s.input_tx.send(InputEvent::Signal(signum)).await;
+    let _ = s.channels.input_tx.send(InputEvent::Signal(sig)).await;
     Json(SignalResponse { delivered: true }).into_response()
 }
 
 /// `GET /api/v1/agent/state`
 pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    if s.nudge_encoder.is_none() && s.respond_encoder.is_none() {
+    if s.config.nudge_encoder.is_none() && s.config.respond_encoder.is_none() {
         return error_response(ErrorCode::NoDriver, "no agent driver configured").into_response();
     }
 
-    let state = s.agent_state.read().await;
-    let screen = s.screen.read().await;
+    let state = s.driver.agent_state.read().await;
+    let screen = s.terminal.screen.read().await;
 
-    let since_seq = s.state_seq.load(Ordering::Relaxed);
-    let tier = s.detection_tier.load(Ordering::Relaxed);
+    let since_seq = s.driver.state_seq.load(Ordering::Relaxed);
+    let tier = s.driver.detection_tier.load(Ordering::Relaxed);
     let tier_str = if tier == u8::MAX {
         "none".to_owned()
     } else {
@@ -415,6 +425,7 @@ pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
 
     let idle_grace_remaining_secs = {
         let deadline = s
+            .driver
             .idle_grace_deadline
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -429,7 +440,7 @@ pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     };
 
     Json(AgentStateResponse {
-        agent_type: s.agent_type.clone(),
+        agent_type: s.config.agent_type.to_string(),
         state: state.as_str().to_owned(),
         since_seq,
         screen_seq: screen.seq(),
@@ -449,7 +460,7 @@ pub async fn agent_nudge(
         return error_response(ErrorCode::NotReady, "agent is still starting").into_response();
     }
 
-    let encoder = match &s.nudge_encoder {
+    let encoder = match &s.config.nudge_encoder {
         Some(enc) => Arc::clone(enc),
         None => {
             return error_response(ErrorCode::NoDriver, "no agent driver configured")
@@ -457,14 +468,14 @@ pub async fn agent_nudge(
         }
     };
 
-    let _guard = match s.write_lock.acquire_http() {
+    let _guard = match s.lifecycle.write_lock.acquire_http() {
         Ok(g) => g,
         Err(code) => {
             return error_response(code, "write lock held by another client").into_response()
         }
     };
 
-    let agent = s.agent_state.read().await;
+    let agent = s.driver.agent_state.read().await;
     let state_before = agent.as_str().to_owned();
 
     match &*agent {
@@ -483,7 +494,7 @@ pub async fn agent_nudge(
 
     let steps = encoder.encode(&req.message);
     let _delivery = s.nudge_mutex.lock().await;
-    let _ = deliver_steps(&s.input_tx, steps).await;
+    let _ = deliver_steps(&s.channels.input_tx, steps).await;
 
     Json(NudgeResponse {
         delivered: true,
@@ -502,7 +513,7 @@ pub async fn agent_respond(
         return error_response(ErrorCode::NotReady, "agent is still starting").into_response();
     }
 
-    let encoder = match &s.respond_encoder {
+    let encoder = match &s.config.respond_encoder {
         Some(enc) => Arc::clone(enc),
         None => {
             return error_response(ErrorCode::NoDriver, "no agent driver configured")
@@ -510,14 +521,14 @@ pub async fn agent_respond(
         }
     };
 
-    let _guard = match s.write_lock.acquire_http() {
+    let _guard = match s.lifecycle.write_lock.acquire_http() {
         Ok(g) => g,
         Err(code) => {
             return error_response(code, "write lock held by another client").into_response()
         }
     };
 
-    let agent = s.agent_state.read().await;
+    let agent = s.driver.agent_state.read().await;
     let prompt_type = agent.as_str().to_owned();
 
     let steps = match encode_response(
@@ -535,7 +546,7 @@ pub async fn agent_respond(
 
     drop(agent);
     let _delivery = s.nudge_mutex.lock().await;
-    let _ = deliver_steps(&s.input_tx, steps).await;
+    let _ = deliver_steps(&s.channels.input_tx, steps).await;
 
     Json(RespondResponse {
         delivered: true,

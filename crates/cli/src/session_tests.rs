@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Alfred Jean LLC
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -17,21 +16,13 @@ async fn echo_exits_with_zero() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx);
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
         app_state,
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     let status = session.run().await?;
     assert_eq!(status.code, Some(0));
@@ -44,26 +35,18 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx);
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "hello-ring".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state: Arc::clone(&app_state),
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
+        Arc::clone(&app_state),
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     let _ = session.run().await?;
 
     // Check ring buffer
-    let ring = app_state.ring.read().await;
+    let ring = app_state.terminal.ring.read().await;
     assert!(ring.total_written() > 0);
     let (a, b) = ring.read_from(0).ok_or(anyhow::anyhow!("no data"))?;
     let mut data = a.to_vec();
@@ -72,7 +55,7 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
     assert!(text.contains("hello-ring"), "ring: {text:?}");
 
     // Check screen
-    let screen = app_state.screen.read().await;
+    let screen = app_state.terminal.screen.read().await;
     let snap = screen.snapshot();
     let lines = snap.lines.join("\n");
     assert!(lines.contains("hello-ring"), "screen: {lines:?}");
@@ -90,25 +73,14 @@ async fn shutdown_cancels_session() -> anyhow::Result<()> {
 
     // Long-running command
     let backend = NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 60".into()], 80, 24)?;
-    let sd = shutdown.clone();
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state,
-        consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown: sd,
-        skip_startup_prompts: false,
-    });
+    let mut config = SessionConfig::test_default(Box::new(backend), app_state, consumer_input_rx);
+    config.shutdown = shutdown.clone();
+    let session = Session::new(config);
 
     // Cancel after a short delay
-    let cancel_shutdown = shutdown.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        cancel_shutdown.cancel();
+        shutdown.cancel();
     });
 
     let status = session.run().await?;

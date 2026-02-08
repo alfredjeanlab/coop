@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::driver::AgentState;
+use crate::event::PtySignal;
 use crate::screen::{CursorPosition, ScreenSnapshot};
 use crate::test_support::{AnyhowExt, TestAppStateBuilder};
 use crate::transport::encode_key;
@@ -217,37 +218,37 @@ fn encode_key_case_insensitive() {
 // ---------------------------------------------------------------------------
 
 #[yare::parameterized(
-    sigint = { "SIGINT", 2 },
-    int = { "INT", 2 },
-    bare_2 = { "2", 2 },
-    sigterm = { "SIGTERM", 15 },
-    term = { "TERM", 15 },
-    bare_15 = { "15", 15 },
-    sighup = { "SIGHUP", 1 },
-    sigkill = { "SIGKILL", 9 },
-    sigusr1 = { "SIGUSR1", 10 },
-    sigusr2 = { "SIGUSR2", 12 },
-    sigcont = { "SIGCONT", 18 },
-    sigstop = { "SIGSTOP", 19 },
-    sigtstp = { "SIGTSTP", 20 },
-    sigwinch = { "SIGWINCH", 28 },
+    sigint = { "SIGINT", PtySignal::Int },
+    int = { "INT", PtySignal::Int },
+    bare_2 = { "2", PtySignal::Int },
+    sigterm = { "SIGTERM", PtySignal::Term },
+    term = { "TERM", PtySignal::Term },
+    bare_15 = { "15", PtySignal::Term },
+    sighup = { "SIGHUP", PtySignal::Hup },
+    sigkill = { "SIGKILL", PtySignal::Kill },
+    sigusr1 = { "SIGUSR1", PtySignal::Usr1 },
+    sigusr2 = { "SIGUSR2", PtySignal::Usr2 },
+    sigcont = { "SIGCONT", PtySignal::Cont },
+    sigstop = { "SIGSTOP", PtySignal::Stop },
+    sigtstp = { "SIGTSTP", PtySignal::Tstp },
+    sigwinch = { "SIGWINCH", PtySignal::Winch },
 )]
-fn parse_signal_known(name: &str, expected: i32) {
-    let result = parse_signal(name);
-    assert_eq!(result, Some(expected), "parse_signal({name:?})");
+fn pty_signal_from_name_known(name: &str, expected: PtySignal) {
+    let result = PtySignal::from_name(name);
+    assert_eq!(result, Some(expected), "PtySignal::from_name({name:?})");
 }
 
 #[test]
-fn parse_signal_unknown_returns_none() {
-    assert!(parse_signal("SIGFOO").is_none());
-    assert!(parse_signal("").is_none());
-    assert!(parse_signal("99").is_none());
+fn pty_signal_from_name_unknown_returns_none() {
+    assert!(PtySignal::from_name("SIGFOO").is_none());
+    assert!(PtySignal::from_name("").is_none());
+    assert!(PtySignal::from_name("99").is_none());
 }
 
 #[test]
-fn parse_signal_case_insensitive() {
-    assert_eq!(parse_signal("sigint"), Some(2));
-    assert_eq!(parse_signal("int"), Some(2));
+fn pty_signal_from_name_case_insensitive() {
+    assert_eq!(PtySignal::from_name("sigint"), Some(PtySignal::Int));
+    assert_eq!(PtySignal::from_name("int"), Some(PtySignal::Int));
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +319,11 @@ async fn nudge_fails_when_write_lock_held() -> anyhow::Result<()> {
 
     let state = mock_app_state_with_encoders(AgentState::WaitingForInput);
     // Simulate another client holding the write lock
-    state.write_lock.acquire_ws("other-client").anyhow()?;
+    state
+        .lifecycle
+        .write_lock
+        .acquire_ws("other-client")
+        .anyhow()?;
 
     let service = CoopGrpc::new(state);
     let req = Request::new(proto::NudgeRequest {
@@ -346,7 +351,11 @@ async fn respond_fails_when_write_lock_held() -> anyhow::Result<()> {
         screen_lines: vec![],
     };
     let state = mock_app_state_with_encoders(AgentState::PermissionPrompt { prompt });
-    state.write_lock.acquire_ws("other-client").anyhow()?;
+    state
+        .lifecycle
+        .write_lock
+        .acquire_ws("other-client")
+        .anyhow()?;
 
     let service = CoopGrpc::new(state);
     let req = Request::new(proto::RespondRequest {

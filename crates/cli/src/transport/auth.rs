@@ -98,7 +98,7 @@ pub async fn auth_layer(
         return next.run(req).await;
     }
 
-    if let Err(code) = validate_bearer(req.headers(), state.auth_token.as_deref()) {
+    if let Err(code) = validate_bearer(req.headers(), state.config.auth_token.as_deref()) {
         let body = ErrorResponse {
             error: code.to_error_body("unauthorized"),
         };

@@ -37,6 +37,29 @@ pub struct SessionConfig {
     pub skip_startup_prompts: bool,
 }
 
+impl SessionConfig {
+    /// Build a `SessionConfig` with test defaults (80x24, no detectors,
+    /// 60s idle grace, no idle timeout, fresh shutdown token).
+    pub fn test_default(
+        backend: Box<dyn Backend>,
+        app_state: Arc<AppState>,
+        consumer_input_rx: mpsc::Receiver<InputEvent>,
+    ) -> Self {
+        Self {
+            backend,
+            detectors: vec![],
+            app_state,
+            consumer_input_rx,
+            cols: 80,
+            rows: 24,
+            idle_grace: Duration::from_secs(60),
+            idle_timeout: Duration::ZERO,
+            shutdown: CancellationToken::new(),
+            skip_startup_prompts: false,
+        }
+    }
+}
+
 /// Core session that runs the select-loop multiplexer.
 pub struct Session {
     app_state: Arc<AppState>,
@@ -72,11 +95,12 @@ impl Session {
             shutdown,
             skip_startup_prompts,
         } = config;
-        // Set initial PID
+        // Set initial PID (Release so signal-delivery loads with Acquire see it)
         if let Some(pid) = backend.child_pid() {
             app_state
+                .terminal
                 .child_pid
-                .store(pid, std::sync::atomic::Ordering::Relaxed);
+                .store(pid, std::sync::atomic::Ordering::Release);
         }
 
         // Set initial terminal size
@@ -101,10 +125,10 @@ impl Session {
             tiers: detectors,
             grace_timer,
         };
-        let ring_total = Arc::clone(&app_state.ring_total_written);
+        let ring_total = Arc::clone(&app_state.terminal.ring_total_written);
         let activity_fn: Arc<dyn Fn() -> u64 + Send + Sync> =
             Arc::new(move || ring_total.load(std::sync::atomic::Ordering::Relaxed));
-        let grace_deadline = Arc::clone(&app_state.idle_grace_deadline);
+        let grace_deadline = Arc::clone(&app_state.driver.idle_grace_deadline);
         let detector_shutdown = shutdown.clone();
         tokio::spawn(composite.run(detector_tx, activity_fn, grace_deadline, detector_shutdown));
 
@@ -137,21 +161,21 @@ impl Session {
                         Some(bytes) => {
                             // Write to ring buffer
                             {
-                                let mut ring = self.app_state.ring.write().await;
+                                let mut ring = self.app_state.terminal.ring.write().await;
                                 ring.write(&bytes);
                                 // Update atomic counter for lock-free activity tracking.
-                                self.app_state.ring_total_written.store(
+                                self.app_state.terminal.ring_total_written.store(
                                     ring.total_written(),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
                             }
                             // Feed screen
                             {
-                                let mut screen = self.app_state.screen.write().await;
+                                let mut screen = self.app_state.terminal.screen.write().await;
                                 screen.feed(&bytes);
                             }
                             // Broadcast raw output
-                            let _ = self.app_state.output_tx.send(OutputEvent::Raw(bytes));
+                            let _ = self.app_state.channels.output_tx.send(OutputEvent::Raw(bytes));
                         }
                         None => {
                             // Backend channel closed — backend exited
@@ -165,7 +189,7 @@ impl Session {
                     match event {
                         Some(InputEvent::Write(data)) => {
                             let len = data.len() as u64;
-                            self.app_state.bytes_written.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+                            self.app_state.lifecycle.bytes_written.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
                             if self.backend_input_tx.send(data).await.is_err() {
                                 debug!("backend input channel closed");
                                 break;
@@ -174,7 +198,7 @@ impl Session {
                         Some(InputEvent::Resize { cols, rows }) => {
                             // Resize screen model
                             {
-                                let mut screen = self.app_state.screen.write().await;
+                                let mut screen = self.app_state.terminal.screen.write().await;
                                 screen.resize(cols, rows);
                             }
                             // Send resize to backend task which calls TIOCSWINSZ on the
@@ -182,11 +206,9 @@ impl Session {
                             let _ = self.resize_tx.send((cols, rows)).await;
                         }
                         Some(InputEvent::Signal(sig)) => {
-                            let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                            let pid = self.app_state.terminal.child_pid.load(std::sync::atomic::Ordering::Acquire);
                             if pid != 0 {
-                                if let Some(signal) = signal_from_i32(sig) {
-                                    let _ = kill(Pid::from_raw(pid as i32), signal);
-                                }
+                                let _ = kill(Pid::from_raw(pid as i32), sig.to_nix());
                             }
                         }
                         None => {
@@ -201,7 +223,7 @@ impl Session {
                 detected = self.detector_rx.recv() => {
                     if let Some(detected) = detected {
                         state_seq += 1;
-                        let mut current = self.app_state.agent_state.write().await;
+                        let mut current = self.app_state.driver.agent_state.write().await;
                         let prev = current.clone();
                         *current = detected.state.clone();
                         drop(current);
@@ -217,10 +239,10 @@ impl Session {
                         }
 
                         // Store metadata for the HTTP/gRPC API.
-                        self.app_state.state_seq.store(state_seq, std::sync::atomic::Ordering::Relaxed);
-                        self.app_state.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Relaxed);
+                        self.app_state.driver.state_seq.store(state_seq, std::sync::atomic::Ordering::Relaxed);
+                        self.app_state.driver.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Relaxed);
 
-                        let _ = self.app_state.state_tx.send(StateChangeEvent {
+                        let _ = self.app_state.channels.state_tx.send(StateChangeEvent {
                             prev,
                             next: detected.state.clone(),
                             seq: state_seq,
@@ -242,7 +264,7 @@ impl Session {
                 // 4. Screen debounce timer → broadcast ScreenUpdate if changed,
                 //    and detect startup prompts when auto-handling is enabled.
                 _ = screen_debounce.tick() => {
-                    let mut screen = self.app_state.screen.write().await;
+                    let mut screen = self.app_state.terminal.screen.write().await;
                     let changed = screen.changed();
                     if changed {
                         let seq = screen.seq();
@@ -270,7 +292,7 @@ impl Session {
                             drop(screen);
                         }
 
-                        let _ = self.app_state.output_tx.send(OutputEvent::ScreenUpdate { seq });
+                        let _ = self.app_state.channels.output_tx.send(OutputEvent::ScreenUpdate { seq });
                     }
                 }
 
@@ -291,7 +313,7 @@ impl Session {
                     debug!("shutdown signal received");
                     // Send SIGHUP to the process group (negative PID) to also
                     // clean up grandchildren spawned by the agent.
-                    let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                    let pid = self.app_state.terminal.child_pid.load(std::sync::atomic::Ordering::Acquire);
                     if pid != 0 {
                         let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGHUP);
                     }
@@ -320,7 +342,7 @@ impl Session {
             }
             _ = tokio::time::sleep(Duration::from_secs(10)) => {
                 warn!("backend did not exit within 10s, sending SIGKILL");
-                let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                let pid = self.app_state.terminal.child_pid.load(std::sync::atomic::Ordering::Acquire);
                 if pid != 0 {
                     // Signal the process group to also kill grandchildren.
                     let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL);
@@ -329,17 +351,20 @@ impl Session {
             }
         };
 
-        // Store exit status and broadcast exited state
+        // Store exit status and broadcast exited state.
+        // ORDERING: exit_status must be written before agent_state so that
+        // any reader who observes AgentState::Exited is guaranteed to find
+        // exit_status populated.
         {
-            let mut exit = self.app_state.exit_status.write().await;
+            let mut exit = self.app_state.terminal.exit_status.write().await;
             *exit = Some(status);
         }
-        let mut current = self.app_state.agent_state.write().await;
+        let mut current = self.app_state.driver.agent_state.write().await;
         let prev = current.clone();
         *current = AgentState::Exited { status };
         drop(current);
         state_seq += 1;
-        let _ = self.app_state.state_tx.send(StateChangeEvent {
+        let _ = self.app_state.channels.state_tx.send(StateChangeEvent {
             prev,
             next: AgentState::Exited { status },
             seq: state_seq,
@@ -351,23 +376,6 @@ impl Session {
     /// Get a reference to the shared application state.
     pub fn app_state(&self) -> &Arc<AppState> {
         &self.app_state
-    }
-}
-
-fn signal_from_i32(sig: i32) -> Option<Signal> {
-    match sig {
-        1 => Some(Signal::SIGHUP),
-        2 => Some(Signal::SIGINT),
-        3 => Some(Signal::SIGQUIT),
-        9 => Some(Signal::SIGKILL),
-        10 => Some(Signal::SIGUSR1),
-        12 => Some(Signal::SIGUSR2),
-        15 => Some(Signal::SIGTERM),
-        18 => Some(Signal::SIGCONT),
-        19 => Some(Signal::SIGSTOP),
-        20 => Some(Signal::SIGTSTP),
-        28 => Some(Signal::SIGWINCH),
-        _ => None,
     }
 }
 

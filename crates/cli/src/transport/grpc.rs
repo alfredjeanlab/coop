@@ -12,10 +12,10 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use super::{deliver_steps, encode_response, keys_to_bytes, parse_signal, read_ring_combined};
+use super::{deliver_steps, encode_response, keys_to_bytes, read_ring_combined};
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
-use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
+use crate::event::{InputEvent, OutputEvent, PtySignal, StateChangeEvent};
 use crate::transport::state::AppState;
 
 /// Generated protobuf types for the `coop.v1` package.
@@ -122,15 +122,15 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         _request: Request<proto::GetHealthRequest>,
     ) -> Result<Response<proto::GetHealthResponse>, Status> {
-        let pid = self.state.child_pid.load(Ordering::Relaxed);
-        let uptime = self.state.started_at.elapsed().as_secs() as i64;
-        let ws = self.state.ws_client_count.load(Ordering::Relaxed);
+        let pid = self.state.terminal.child_pid.load(Ordering::Relaxed);
+        let uptime = self.state.config.started_at.elapsed().as_secs() as i64;
+        let ws = self.state.lifecycle.ws_client_count.load(Ordering::Relaxed);
 
         Ok(Response::new(proto::GetHealthResponse {
             status: "ok".to_owned(),
             pid: if pid == 0 { None } else { Some(pid as i32) },
             uptime_secs: uptime,
-            agent_type: self.state.agent_type.clone(),
+            agent_type: self.state.config.agent_type.to_string(),
             ws_clients: ws,
         }))
     }
@@ -143,7 +143,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::GetScreenRequest>,
     ) -> Result<Response<proto::GetScreenResponse>, Status> {
         let req = request.into_inner();
-        let screen = self.state.screen.read().await;
+        let screen = self.state.terminal.screen.read().await;
         let snap = screen.snapshot();
         Ok(Response::new(screen_snapshot_to_response(
             &snap,
@@ -158,17 +158,17 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         _request: Request<proto::GetStatusRequest>,
     ) -> Result<Response<proto::GetStatusResponse>, Status> {
-        let pid = self.state.child_pid.load(Ordering::Relaxed);
-        let agent = self.state.agent_state.read().await;
-        let screen = self.state.screen.read().await;
-        let ring = self.state.ring.read().await;
-        let uptime = self.state.started_at.elapsed().as_secs() as i64;
-        let exit = self.state.exit_status.read().await;
+        let pid = self.state.terminal.child_pid.load(Ordering::Relaxed);
+        let agent = self.state.driver.agent_state.read().await;
+        let screen = self.state.terminal.screen.read().await;
+        let ring = self.state.terminal.ring.read().await;
+        let uptime = self.state.config.started_at.elapsed().as_secs() as i64;
+        let exit = self.state.terminal.exit_status.read().await;
 
         let exit_code = exit.as_ref().and_then(|e| e.code);
 
-        let bw = self.state.bytes_written.load(Ordering::Relaxed);
-        let ws = self.state.ws_client_count.load(Ordering::Relaxed);
+        let bw = self.state.lifecycle.bytes_written.load(Ordering::Relaxed);
+        let ws = self.state.lifecycle.ws_client_count.load(Ordering::Relaxed);
 
         Ok(Response::new(proto::GetStatusResponse {
             state: agent.as_str().to_owned(),
@@ -196,6 +196,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         }
         let len = payload.len() as i32;
         self.state
+            .channels
             .input_tx
             .send(InputEvent::Write(Bytes::from(payload)))
             .await
@@ -218,6 +219,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         })?;
         let len = data.len() as i32;
         self.state
+            .channels
             .input_tx
             .send(InputEvent::Write(Bytes::from(data)))
             .await
@@ -241,6 +243,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         let cols = req.cols as u16;
         let rows = req.rows as u16;
         self.state
+            .channels
             .input_tx
             .send(InputEvent::Resize { cols, rows })
             .await
@@ -259,12 +262,13 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::SendSignalRequest>,
     ) -> Result<Response<proto::SendSignalResponse>, Status> {
         let req = request.into_inner();
-        let signum = parse_signal(&req.signal).ok_or_else(|| {
+        let sig = PtySignal::from_name(&req.signal).ok_or_else(|| {
             ErrorCode::BadRequest.to_grpc_status(format!("unknown signal: {}", req.signal))
         })?;
         self.state
+            .channels
             .input_tx
-            .send(InputEvent::Signal(signum))
+            .send(InputEvent::Signal(sig))
             .await
             .map_err(|_| ErrorCode::WriterBusy.to_grpc_status("input channel closed"))?;
         Ok(Response::new(proto::SendSignalResponse { delivered: true }))
@@ -277,11 +281,11 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         _request: Request<proto::GetAgentStateRequest>,
     ) -> Result<Response<proto::GetAgentStateResponse>, Status> {
-        let agent = self.state.agent_state.read().await;
-        let screen = self.state.screen.read().await;
+        let agent = self.state.driver.agent_state.read().await;
+        let screen = self.state.terminal.screen.read().await;
 
-        let since_seq = self.state.state_seq.load(Ordering::Relaxed);
-        let tier = self.state.detection_tier.load(Ordering::Relaxed);
+        let since_seq = self.state.driver.state_seq.load(Ordering::Relaxed);
+        let tier = self.state.driver.detection_tier.load(Ordering::Relaxed);
         let detection_tier = if tier == u8::MAX {
             "none".to_owned()
         } else {
@@ -291,6 +295,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         let idle_grace_remaining_secs = {
             let deadline = self
                 .state
+                .driver
                 .idle_grace_deadline
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -305,7 +310,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         };
 
         Ok(Response::new(proto::GetAgentStateResponse {
-            agent_type: self.state.agent_type.clone(),
+            agent_type: self.state.config.agent_type.to_string(),
             state: agent.as_str().to_owned(),
             since_seq,
             screen_seq: screen.seq(),
@@ -330,17 +335,19 @@ impl proto::coop_server::Coop for CoopGrpc {
 
         let encoder = self
             .state
+            .config
             .nudge_encoder
             .as_ref()
             .ok_or_else(|| ErrorCode::NoDriver.to_grpc_status("no nudge encoder configured"))?;
 
         let _guard = self
             .state
+            .lifecycle
             .write_lock
             .acquire_http()
             .map_err(|code| code.to_grpc_status("write lock held by another client"))?;
 
-        let agent = self.state.agent_state.read().await;
+        let agent = self.state.driver.agent_state.read().await;
         let state_before = agent.as_str().to_owned();
 
         match &*agent {
@@ -359,7 +366,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         drop(agent);
 
         let _delivery = self.state.nudge_mutex.lock().await;
-        deliver_steps(&self.state.input_tx, steps)
+        deliver_steps(&self.state.channels.input_tx, steps)
             .await
             .map_err(|code| code.to_grpc_status("input channel closed"))?;
 
@@ -384,17 +391,18 @@ impl proto::coop_server::Coop for CoopGrpc {
         let req = request.into_inner();
 
         let encoder =
-            self.state.respond_encoder.as_ref().ok_or_else(|| {
+            self.state.config.respond_encoder.as_ref().ok_or_else(|| {
                 ErrorCode::NoDriver.to_grpc_status("no respond encoder configured")
             })?;
 
         let _guard = self
             .state
+            .lifecycle
             .write_lock
             .acquire_http()
             .map_err(|code| code.to_grpc_status("write lock held by another client"))?;
 
-        let agent = self.state.agent_state.read().await;
+        let agent = self.state.driver.agent_state.read().await;
 
         let steps = encode_response(
             &agent,
@@ -412,7 +420,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         drop(agent);
 
         let _delivery = self.state.nudge_mutex.lock().await;
-        deliver_steps(&self.state.input_tx, steps)
+        deliver_steps(&self.state.channels.input_tx, steps)
             .await
             .map_err(|code| code.to_grpc_status("input channel closed"))?;
 
@@ -437,7 +445,7 @@ impl proto::coop_server::Coop for CoopGrpc {
 
         // Replay buffered data from ring buffer
         {
-            let ring = self.state.ring.read().await;
+            let ring = self.state.terminal.ring.read().await;
             let data = read_ring_combined(&ring, from_offset);
             if !data.is_empty() {
                 let _ = tx
@@ -450,14 +458,14 @@ impl proto::coop_server::Coop for CoopGrpc {
         }
 
         // Subscribe to live output
-        let mut output_rx = self.state.output_tx.subscribe();
-        let ring = Arc::clone(&self.state.ring);
+        let mut output_rx = self.state.channels.output_tx.subscribe();
+        let terminal = Arc::clone(&self.state.terminal);
 
         tokio::spawn(async move {
             loop {
                 match output_rx.recv().await {
                     Ok(OutputEvent::Raw(data)) => {
-                        let r = ring.read().await;
+                        let r = terminal.ring.read().await;
                         let offset = r.total_written() - data.len() as u64;
                         drop(r);
                         let chunk = proto::OutputChunk {
@@ -492,14 +500,14 @@ impl proto::coop_server::Coop for CoopGrpc {
         _request: Request<proto::StreamScreenRequest>,
     ) -> Result<Response<Self::StreamScreenStream>, Status> {
         let (tx, rx) = mpsc::channel(16);
-        let mut output_rx = self.state.output_tx.subscribe();
-        let screen = Arc::clone(&self.state.screen);
+        let mut output_rx = self.state.channels.output_tx.subscribe();
+        let terminal = Arc::clone(&self.state.terminal);
 
         tokio::spawn(async move {
             loop {
                 match output_rx.recv().await {
                     Ok(OutputEvent::ScreenUpdate { .. }) => {
-                        let s = screen.read().await;
+                        let s = terminal.screen.read().await;
                         let snap = s.snapshot();
                         drop(s);
                         let proto_snap = screen_snapshot_to_proto(&snap);
@@ -529,7 +537,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         _request: Request<proto::StreamStateRequest>,
     ) -> Result<Response<Self::StreamStateStream>, Status> {
         let (tx, rx) = mpsc::channel(16);
-        let mut state_rx = self.state.state_tx.subscribe();
+        let mut state_rx = self.state.channels.state_tx.subscribe();
 
         tokio::spawn(async move {
             loop {

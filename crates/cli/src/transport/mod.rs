@@ -92,30 +92,6 @@ pub fn encode_key(name: &str) -> Option<Vec<u8>> {
     Some(bytes.to_vec())
 }
 
-/// Parse a signal name (e.g. "SIGINT", "INT", "2") into a signal number.
-pub fn parse_signal(name: &str) -> Option<i32> {
-    let upper = name.to_uppercase();
-    let bare: &str = match upper.strip_prefix("SIG") {
-        Some(s) => s,
-        None => &upper,
-    };
-
-    match bare {
-        "HUP" | "1" => Some(1),
-        "INT" | "2" => Some(2),
-        "QUIT" | "3" => Some(3),
-        "KILL" | "9" => Some(9),
-        "TERM" | "15" => Some(15),
-        "USR1" | "10" => Some(10),
-        "USR2" | "12" => Some(12),
-        "CONT" | "18" => Some(18),
-        "STOP" | "19" => Some(19),
-        "TSTP" | "20" => Some(20),
-        "WINCH" | "28" => Some(28),
-        _ => None,
-    }
-}
-
 /// Send encoder steps to the PTY, respecting inter-step delays.
 pub async fn deliver_steps(
     input_tx: &tokio::sync::mpsc::Sender<InputEvent>,

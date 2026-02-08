@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::driver::AgentType;
+
 /// Terminal session manager for AI coding agents.
 #[derive(Debug, Parser)]
 #[command(name = "coop", version, about)]
@@ -89,15 +91,6 @@ pub struct Config {
     /// Command to run (after --).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
-}
-
-/// Known agent types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentType {
-    Claude,
-    Codex,
-    Gemini,
-    Unknown,
 }
 
 impl Config {

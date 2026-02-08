@@ -20,13 +20,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
-use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
+use crate::event::{InputEvent, OutputEvent, PtySignal, StateChangeEvent};
 use crate::screen::CursorPosition;
 use crate::transport::auth;
 use crate::transport::state::AppState;
-use crate::transport::{
-    deliver_steps, encode_response, keys_to_bytes, parse_signal, read_ring_combined,
-};
+use crate::transport::{deliver_steps, encode_response, keys_to_bytes, read_ring_combined};
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -150,9 +148,9 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     // Validate auth token from query param if one is required.
-    if state.auth_token.is_some() {
+    if state.config.auth_token.is_some() {
         if let Some(ref token) = query.token {
-            if let Err(_code) = auth::validate_ws_auth(token, state.auth_token.as_deref()) {
+            if let Err(_code) = auth::validate_ws_auth(token, state.config.auth_token.as_deref()) {
                 return axum::http::Response::builder()
                     .status(401)
                     .body(axum::body::Body::from("unauthorized"))
@@ -165,7 +163,7 @@ pub async fn ws_handler(
     }
 
     let mode = query.mode;
-    let needs_auth = state.auth_token.is_some() && query.token.is_none();
+    let needs_auth = state.config.auth_token.is_some() && query.token.is_none();
 
     ws.on_upgrade(move |socket| {
         let client_id = format!("ws-{}", next_client_id());
@@ -182,11 +180,14 @@ async fn handle_connection(
     client_id: String,
     needs_auth: bool,
 ) {
-    state.ws_client_count.fetch_add(1, Ordering::Relaxed);
+    state
+        .lifecycle
+        .ws_client_count
+        .fetch_add(1, Ordering::Relaxed);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let mut output_rx = state.output_tx.subscribe();
-    let mut state_rx = state.state_tx.subscribe();
+    let mut output_rx = state.channels.output_tx.subscribe();
+    let mut state_rx = state.channels.state_tx.subscribe();
     let mut authed = !needs_auth;
 
     loop {
@@ -199,7 +200,7 @@ async fn handle_connection(
                 match (&event, mode) {
                     (OutputEvent::Raw(data), SubscriptionMode::Raw | SubscriptionMode::All) => {
                         let encoded = base64::engine::general_purpose::STANDARD.encode(data);
-                        let ring = state.ring.read().await;
+                        let ring = state.terminal.ring.read().await;
                         let offset = ring.total_written().saturating_sub(data.len() as u64);
                         let msg = ServerMessage::Output { data: encoded, offset };
                         if send_json(&mut ws_tx, &msg).await.is_err() {
@@ -207,7 +208,7 @@ async fn handle_connection(
                         }
                     }
                     (OutputEvent::ScreenUpdate { seq }, SubscriptionMode::Screen | SubscriptionMode::All) => {
-                        let snap = state.screen.read().await.snapshot();
+                        let snap = state.terminal.screen.read().await.snapshot();
                         let msg = ServerMessage::Screen {
                             lines: snap.lines,
                             cols: snap.cols,
@@ -271,8 +272,11 @@ async fn handle_connection(
     }
 
     // Cleanup
-    state.ws_client_count.fetch_sub(1, Ordering::Relaxed);
-    state.write_lock.force_release_ws(&client_id);
+    state
+        .lifecycle
+        .ws_client_count
+        .fetch_sub(1, Ordering::Relaxed);
+    state.lifecycle.write_lock.force_release_ws(&client_id);
 }
 
 /// Handle a single client message and optionally return a reply.
@@ -286,7 +290,7 @@ async fn handle_client_message(
         ClientMessage::Ping {} => Some(ServerMessage::Pong {}),
 
         ClientMessage::Auth { token } => {
-            match auth::validate_ws_auth(&token, state.auth_token.as_deref()) {
+            match auth::validate_ws_auth(&token, state.config.auth_token.as_deref()) {
                 Ok(()) => {
                     *authed = true;
                     None
@@ -299,7 +303,7 @@ async fn handle_client_message(
         }
 
         ClientMessage::ScreenRequest {} => {
-            let snap = state.screen.read().await.snapshot();
+            let snap = state.terminal.screen.read().await.snapshot();
             Some(ServerMessage::Screen {
                 lines: snap.lines,
                 cols: snap.cols,
@@ -311,8 +315,8 @@ async fn handle_client_message(
         }
 
         ClientMessage::StateRequest {} => {
-            let agent = state.agent_state.read().await;
-            let screen = state.screen.read().await;
+            let agent = state.driver.agent_state.read().await;
+            let screen = state.terminal.screen.read().await;
             Some(ServerMessage::StateChange {
                 prev: agent.as_str().to_owned(),
                 next: agent.as_str().to_owned(),
@@ -322,7 +326,7 @@ async fn handle_client_message(
         }
 
         ClientMessage::Replay { offset } => {
-            let ring = state.ring.read().await;
+            let ring = state.terminal.ring.read().await;
             let combined = read_ring_combined(&ring, offset);
             let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
             Some(ServerMessage::Output {
@@ -336,11 +340,11 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
             let data = Bytes::from(text.into_bytes());
-            let _ = state.input_tx.send(InputEvent::Write(data)).await;
+            let _ = state.channels.input_tx.send(InputEvent::Write(data)).await;
             None
         }
 
@@ -348,13 +352,14 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(&data)
                 .unwrap_or_default();
             let _ = state
+                .channels
                 .input_tx
                 .send(InputEvent::Write(Bytes::from(decoded)))
                 .await;
@@ -365,7 +370,7 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
             let data = match keys_to_bytes(&keys) {
@@ -378,6 +383,7 @@ async fn handle_client_message(
                 }
             };
             let _ = state
+                .channels
                 .input_tx
                 .send(InputEvent::Write(Bytes::from(data)))
                 .await;
@@ -391,7 +397,11 @@ async fn handle_client_message(
                     "cols and rows must be positive",
                 ));
             }
-            let _ = state.input_tx.send(InputEvent::Resize { cols, rows }).await;
+            let _ = state
+                .channels
+                .input_tx
+                .send(InputEvent::Resize { cols, rows })
+                .await;
             None
         }
 
@@ -400,11 +410,11 @@ async fn handle_client_message(
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
             match action {
-                LockAction::Acquire => match state.write_lock.acquire_ws(client_id) {
+                LockAction::Acquire => match state.lifecycle.write_lock.acquire_ws(client_id) {
                     Ok(()) => None,
                     Err(code) => Some(ws_error(code, "write lock held by another client")),
                 },
-                LockAction::Release => match state.write_lock.release_ws(client_id) {
+                LockAction::Release => match state.lifecycle.write_lock.release_ws(client_id) {
                     Ok(()) => None,
                     Err(code) => Some(ws_error(code, "not the lock owner")),
                 },
@@ -418,14 +428,14 @@ async fn handle_client_message(
             if !state.ready.load(Ordering::Acquire) {
                 return Some(ws_error(ErrorCode::NotReady, "agent is still starting"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
-            let encoder = match &state.nudge_encoder {
+            let encoder = match &state.config.nudge_encoder {
                 Some(enc) => Arc::clone(enc),
                 None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
             };
-            let agent = state.agent_state.read().await;
+            let agent = state.driver.agent_state.read().await;
             if !matches!(&*agent, AgentState::WaitingForInput) {
                 return Some(ws_error(
                     ErrorCode::AgentBusy,
@@ -435,7 +445,7 @@ async fn handle_client_message(
             drop(agent);
             let steps = encoder.encode(&message);
             let _delivery = state.nudge_mutex.lock().await;
-            let _ = deliver_steps(&state.input_tx, steps).await;
+            let _ = deliver_steps(&state.channels.input_tx, steps).await;
             None
         }
 
@@ -450,14 +460,14 @@ async fn handle_client_message(
             if !state.ready.load(Ordering::Acquire) {
                 return Some(ws_error(ErrorCode::NotReady, "agent is still starting"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
-            let encoder = match &state.respond_encoder {
+            let encoder = match &state.config.respond_encoder {
                 Some(enc) => Arc::clone(enc),
                 None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
             };
-            let agent = state.agent_state.read().await;
+            let agent = state.driver.agent_state.read().await;
             let steps =
                 match encode_response(&agent, encoder.as_ref(), accept, option, text.as_deref()) {
                     Ok(s) => s,
@@ -467,7 +477,7 @@ async fn handle_client_message(
                 };
             drop(agent);
             let _delivery = state.nudge_mutex.lock().await;
-            let _ = deliver_steps(&state.input_tx, steps).await;
+            let _ = deliver_steps(&state.channels.input_tx, steps).await;
             None
         }
 
@@ -475,12 +485,12 @@ async fn handle_client_message(
             if !*authed {
                 return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
             }
-            if let Err(code) = state.write_lock.check_ws(client_id) {
+            if let Err(code) = state.lifecycle.write_lock.check_ws(client_id) {
                 return Some(ws_error(code, "write lock not held"));
             }
-            match parse_signal(&name) {
-                Some(signum) => {
-                    let _ = state.input_tx.send(InputEvent::Signal(signum)).await;
+            match PtySignal::from_name(&name) {
+                Some(sig) => {
+                    let _ = state.channels.input_tx.send(InputEvent::Signal(sig)).await;
                     None
                 }
                 None => Some(ws_error(

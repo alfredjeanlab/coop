@@ -224,7 +224,7 @@ async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
         .ready
         .store(true, std::sync::atomic::Ordering::Release);
     let client_id = "test-ws";
-    state.write_lock.acquire_ws(client_id).anyhow()?;
+    state.lifecycle.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Nudge {
         message: "hello".to_owned(),
@@ -246,7 +246,7 @@ async fn nudge_accepted_when_agent_waiting() -> anyhow::Result<()> {
         .ready
         .store(true, std::sync::atomic::Ordering::Release);
     let client_id = "test-ws";
-    state.write_lock.acquire_ws(client_id).anyhow()?;
+    state.lifecycle.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Nudge {
         message: "hello".to_owned(),
@@ -260,7 +260,7 @@ async fn nudge_accepted_when_agent_waiting() -> anyhow::Result<()> {
 async fn signal_delivers_sigint() -> anyhow::Result<()> {
     let (state, mut rx) = ws_test_state(AgentState::Working);
     let client_id = "test-ws";
-    state.write_lock.acquire_ws(client_id).anyhow()?;
+    state.lifecycle.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Signal {
         name: "SIGINT".to_owned(),
@@ -270,8 +270,13 @@ async fn signal_delivers_sigint() -> anyhow::Result<()> {
 
     let event = rx.recv().await;
     assert!(
-        matches!(event, Some(crate::event::InputEvent::Signal(2))),
-        "expected Signal(2), got {event:?}"
+        matches!(
+            event,
+            Some(crate::event::InputEvent::Signal(
+                crate::event::PtySignal::Int
+            ))
+        ),
+        "expected Signal(Int), got {event:?}"
     );
     Ok(())
 }
@@ -280,7 +285,7 @@ async fn signal_delivers_sigint() -> anyhow::Result<()> {
 async fn signal_rejects_unknown() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::Working);
     let client_id = "test-ws";
-    state.write_lock.acquire_ws(client_id).anyhow()?;
+    state.lifecycle.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Signal {
         name: "SIGFOO".to_owned(),
@@ -299,7 +304,7 @@ async fn signal_rejects_unknown() -> anyhow::Result<()> {
 async fn keys_rejects_unknown_key() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::Working);
     let client_id = "test-ws";
-    state.write_lock.acquire_ws(client_id).anyhow()?;
+    state.lifecycle.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Keys {
         keys: vec!["Enter".to_owned(), "SuperKey".to_owned()],

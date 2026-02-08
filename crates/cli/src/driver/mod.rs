@@ -12,6 +12,7 @@ pub mod unknown;
 
 use grace::{GraceCheck, IdleGraceTimer};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,6 +20,27 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+
+/// Known agent types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentType {
+    Claude,
+    Codex,
+    Gemini,
+    Unknown,
+}
+
+impl fmt::Display for AgentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Claude => f.write_str("claude"),
+            Self::Codex => f.write_str("codex"),
+            Self::Gemini => f.write_str("gemini"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
 
 /// Classified state of the agent process.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

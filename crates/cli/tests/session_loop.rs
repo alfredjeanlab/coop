@@ -5,7 +5,6 @@
 //! the full stack in-process via `axum_test::TestServer`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::http::StatusCode;
 use bytes::Bytes;
@@ -30,27 +29,19 @@ async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx);
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "integration".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state: Arc::clone(&app_state),
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
+        Arc::clone(&app_state),
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     let status = session.run().await?;
     assert_eq!(status.code, Some(0));
 
     // Ring should contain output
-    let ring = app_state.ring.read().await;
+    let ring = app_state.terminal.ring.read().await;
     assert!(ring.total_written() > 0);
     let (a, b) = ring.read_from(0).ok_or(anyhow::anyhow!("no ring data"))?;
     let mut data = a.to_vec();
@@ -59,7 +50,7 @@ async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
     assert!(text.contains("integration"), "ring: {text:?}");
 
     // Screen should contain output
-    let screen = app_state.screen.read().await;
+    let screen = app_state.terminal.screen.read().await;
     let snap = screen.snapshot();
     let lines = snap.lines.join("\n");
     assert!(lines.contains("integration"), "screen: {lines:?}");
@@ -73,21 +64,13 @@ async fn session_input_roundtrip() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx.clone());
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["/bin/cat".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state: Arc::clone(&app_state),
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
+        Arc::clone(&app_state),
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     let session_handle = tokio::spawn(async move { session.run().await });
 
@@ -108,7 +91,7 @@ async fn session_input_roundtrip() -> anyhow::Result<()> {
     assert_eq!(status.code, Some(0));
 
     // Verify output captured in ring
-    let ring = app_state.ring.read().await;
+    let ring = app_state.terminal.ring.read().await;
     let (a, b) = ring.read_from(0).ok_or(anyhow::anyhow!("no ring data"))?;
     let mut data = a.to_vec();
     data.extend_from_slice(b);
@@ -127,25 +110,14 @@ async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 60".into()], 80, 24)?;
-    let sd = shutdown.clone();
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state,
-        consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown: sd,
-        skip_startup_prompts: false,
-    });
+    let mut config = SessionConfig::test_default(Box::new(backend), app_state, consumer_input_rx);
+    config.shutdown = shutdown.clone();
+    let session = Session::new(config);
 
     // Cancel after a short delay
-    let cancel = shutdown.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        cancel.cancel();
+        shutdown.cancel();
     });
 
     let status = session.run().await?;
@@ -162,26 +134,18 @@ async fn session_exited_state_broadcast() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx);
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["true".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state: Arc::clone(&app_state),
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
+        Arc::clone(&app_state),
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     let _ = session.run().await?;
 
     // After run(), agent_state should be Exited
-    let agent = app_state.agent_state.read().await;
+    let agent = app_state.driver.agent_state.read().await;
     match &*agent {
         AgentState::Exited { status } => {
             assert_eq!(status.code, Some(0));
@@ -387,21 +351,13 @@ async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
     let app_state = TestAppStateBuilder::new()
         .ring_size(65536)
         .build_with_sender(input_tx);
-    let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "fullstack".into()], 80, 24)?;
-    let session = Session::new(SessionConfig {
-        backend: Box::new(backend),
-        detectors: vec![],
-        app_state: Arc::clone(&app_state),
+    let session = Session::new(SessionConfig::test_default(
+        Box::new(backend),
+        Arc::clone(&app_state),
         consumer_input_rx,
-        cols: 80,
-        rows: 24,
-        idle_grace: Duration::from_secs(60),
-        idle_timeout: Duration::ZERO,
-        shutdown,
-        skip_startup_prompts: false,
-    });
+    ));
 
     // Run session to completion
     let _ = session.run().await?;

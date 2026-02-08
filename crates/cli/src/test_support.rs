@@ -13,12 +13,15 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::{AgentState, ExitStatus, NudgeEncoder, RespondEncoder};
+use crate::driver::{AgentState, AgentType, ExitStatus, NudgeEncoder, RespondEncoder};
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::pty::Backend;
 use crate::ring::RingBuffer;
 use crate::screen::Screen;
-use crate::transport::state::{AppState, WriteLock};
+use crate::transport::state::{
+    AppState, DriverState, LifecycleState, SessionSettings, TerminalState, TransportChannels,
+    WriteLock,
+};
 
 // ---------------------------------------------------------------------------
 // TestAppStateBuilder
@@ -95,30 +98,40 @@ impl TestAppStateBuilder {
         let (state_tx, _) = broadcast::channel::<StateChangeEvent>(64);
 
         Arc::new(AppState {
-            started_at: Instant::now(),
-            agent_type: "unknown".to_owned(),
-            screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-            ring: Arc::new(RwLock::new(RingBuffer::new(self.ring_size))),
-            agent_state: Arc::new(RwLock::new(self.agent_state)),
-            input_tx,
-            output_tx,
-            state_tx,
-            child_pid: Arc::new(AtomicU32::new(self.child_pid)),
-            exit_status: Arc::new(RwLock::new(None)),
-            write_lock: Arc::new(WriteLock::new()),
-            ws_client_count: Arc::new(AtomicI32::new(0)),
-            bytes_written: AtomicU64::new(0),
-            auth_token: self.auth_token,
-            nudge_encoder: self.nudge_encoder,
-            respond_encoder: self.respond_encoder,
-            shutdown: CancellationToken::new(),
-            nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            terminal: Arc::new(TerminalState {
+                screen: RwLock::new(Screen::new(80, 24)),
+                ring: RwLock::new(RingBuffer::new(self.ring_size)),
+                ring_total_written: Arc::new(AtomicU64::new(0)),
+                child_pid: AtomicU32::new(self.child_pid),
+                exit_status: RwLock::new(None),
+            }),
+            driver: Arc::new(DriverState {
+                agent_state: RwLock::new(self.agent_state),
+                state_seq: AtomicU64::new(0),
+                detection_tier: AtomicU8::new(u8::MAX),
+                idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+            }),
+            channels: TransportChannels {
+                input_tx,
+                output_tx,
+                state_tx,
+            },
+            config: SessionSettings {
+                started_at: Instant::now(),
+                agent_type: AgentType::Unknown,
+                auth_token: self.auth_token,
+                nudge_encoder: self.nudge_encoder,
+                respond_encoder: self.respond_encoder,
+                idle_grace_duration: Duration::from_secs(60),
+            },
+            lifecycle: LifecycleState {
+                shutdown: CancellationToken::new(),
+                write_lock: Arc::new(WriteLock::new()),
+                ws_client_count: AtomicI32::new(0),
+                bytes_written: AtomicU64::new(0),
+            },
             ready: Arc::new(AtomicBool::new(false)),
-            state_seq: AtomicU64::new(0),
-            detection_tier: AtomicU8::new(u8::MAX),
-            idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-            idle_grace_duration: Duration::from_secs(60),
-            ring_total_written: Arc::new(AtomicU64::new(0)),
+            nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 }

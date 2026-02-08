@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,9 +11,10 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use coop::config::{AgentType, Config};
+use coop::config::Config;
 use coop::driver::claude::resume;
 use coop::driver::claude::{ClaudeDriver, ClaudeDriverConfig};
+use coop::driver::AgentType;
 use coop::driver::{AgentState, Detector, NudgeEncoder, RespondEncoder};
 use coop::pty::attach::{AttachSpec, TmuxBackend};
 use coop::pty::spawn::NativePty;
@@ -22,7 +23,9 @@ use coop::ring::RingBuffer;
 use coop::screen::Screen;
 use coop::session::Session;
 use coop::transport::grpc::CoopGrpc;
-use coop::transport::state::WriteLock;
+use coop::transport::state::{
+    DriverState, LifecycleState, SessionSettings, TerminalState, TransportChannels, WriteLock,
+};
 use coop::transport::{build_health_router, build_router, AppState};
 
 #[tokio::main]
@@ -99,20 +102,27 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         Box::new(NativePty::spawn(&command, config.cols, config.rows)?)
     };
 
-    // Shared atomics created early so closures can reference them.
-    let child_pid = Arc::new(AtomicU32::new(0));
-    let ring_total_written = Arc::new(AtomicU64::new(0));
+    // Build terminal state early so driver closures can reference its atomics.
+    let terminal = Arc::new(TerminalState {
+        screen: RwLock::new(Screen::new(config.cols, config.rows)),
+        ring: RwLock::new(RingBuffer::new(config.ring_size)),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
+        child_pid: AtomicU32::new(0),
+        exit_status: RwLock::new(None),
+    });
 
     // Build driver (detectors + encoders)
     let agent_type_enum = config.agent_type_enum()?;
     let log_start_offset = resume_state.as_ref().map(|s| s.log_offset).unwrap_or(0);
-    let pid_for_driver = Arc::clone(&child_pid);
-    let rtw_for_driver = Arc::clone(&ring_total_written);
+    let pid_terminal = Arc::clone(&terminal);
+    let rtw_for_driver = Arc::clone(&terminal.ring_total_written);
     let (nudge_encoder, respond_encoder, detectors) = build_driver(
         &config,
         agent_type_enum,
         Arc::new(move || {
-            let v = pid_for_driver.load(std::sync::atomic::Ordering::Relaxed);
+            let v = pid_terminal
+                .child_pid
+                .load(std::sync::atomic::Ordering::Relaxed);
             if v == 0 {
                 None
             } else {
@@ -132,30 +142,34 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
     let (state_tx, _) = broadcast::channel(64);
 
     let app_state = Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: config.agent_type.clone(),
-        screen: Arc::new(RwLock::new(Screen::new(config.cols, config.rows))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(config.ring_size))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid,
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: config.auth_token.clone(),
-        nudge_encoder,
-        respond_encoder,
-        shutdown: shutdown.clone(),
-        nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        terminal,
+        driver: Arc::new(DriverState {
+            agent_state: RwLock::new(AgentState::Starting),
+            state_seq: AtomicU64::new(0),
+            detection_tier: AtomicU8::new(u8::MAX),
+            idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        }),
+        channels: TransportChannels {
+            input_tx,
+            output_tx,
+            state_tx,
+        },
+        config: SessionSettings {
+            started_at: Instant::now(),
+            agent_type: agent_type_enum,
+            auth_token: config.auth_token.clone(),
+            nudge_encoder,
+            respond_encoder,
+            idle_grace_duration: idle_grace,
+        },
+        lifecycle: LifecycleState {
+            shutdown: shutdown.clone(),
+            write_lock: Arc::new(WriteLock::new()),
+            ws_client_count: AtomicI32::new(0),
+            bytes_written: AtomicU64::new(0),
+        },
         ready: Arc::new(AtomicBool::new(false)),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: idle_grace,
-        ring_total_written,
+        nudge_mutex: Arc::new(tokio::sync::Mutex::new(())),
     });
 
     // Spawn HTTP server
