@@ -9,6 +9,9 @@ pub struct Screen {
     seq: u64,
     changed: bool,
     alt_screen: bool,
+    /// Buffer for incomplete UTF-8 trailing bytes between `feed()` calls.
+    utf8_buf: [u8; 3],
+    utf8_buf_len: u8,
 }
 
 impl std::fmt::Debug for Screen {
@@ -26,6 +29,37 @@ const ALT_SCREEN_ON: &[u8] = b"\x1b[?1049h";
 /// DECRST alternate screen buffer disable.
 const ALT_SCREEN_OFF: &[u8] = b"\x1b[?1049l";
 
+/// Returns the number of trailing bytes that form an incomplete UTF-8 sequence.
+///
+/// Scans backwards from the end of `data` looking for a leading byte whose
+/// expected sequence length exceeds the bytes available.  Returns 0 when the
+/// tail is complete (or pure ASCII).
+fn incomplete_utf8_tail_len(data: &[u8]) -> usize {
+    let len = data.len();
+    for i in 1..=len.min(3) {
+        let byte = data[len - i];
+        if byte < 0x80 {
+            // ASCII — no incomplete sequence possible.
+            return 0;
+        }
+        if byte >= 0xC0 {
+            // Leading byte: check whether the sequence is complete.
+            let expected = if byte < 0xE0 {
+                2
+            } else if byte < 0xF0 {
+                3
+            } else {
+                4
+            };
+            return if i < expected { i } else { 0 };
+        }
+        // Continuation byte (0x80..0xBF) — keep scanning backwards.
+    }
+    // Only continuation bytes found with no leading byte — not a valid partial
+    // sequence, let lossy handle it.
+    0
+}
+
 impl Screen {
     /// Create a new screen with the given dimensions.
     pub fn new(cols: u16, rows: u16) -> Self {
@@ -34,6 +68,8 @@ impl Screen {
             seq: 0,
             changed: false,
             alt_screen: false,
+            utf8_buf: [0; 3],
+            utf8_buf_len: 0,
         }
     }
 
@@ -44,7 +80,8 @@ impl Screen {
         }
 
         // Track alt screen transitions from raw escape sequences since
-        // avt::Vt doesn't expose the active buffer type.
+        // avt::Vt doesn't expose the active buffer type.  Escape sequences
+        // are pure ASCII so they are unaffected by the UTF-8 buffering below.
         if data
             .windows(ALT_SCREEN_ON.len())
             .any(|w| w == ALT_SCREEN_ON)
@@ -58,8 +95,31 @@ impl Screen {
             self.alt_screen = false;
         }
 
-        let s = String::from_utf8_lossy(data);
-        let _ = self.vt.feed_str(&s);
+        // Prepend any buffered incomplete UTF-8 bytes from the previous call.
+        let buf_len = self.utf8_buf_len as usize;
+        let owned: Vec<u8>;
+        let input = if buf_len == 0 {
+            data
+        } else {
+            owned = [&self.utf8_buf[..buf_len], data].concat();
+            self.utf8_buf_len = 0;
+            &owned
+        };
+
+        // Split off any incomplete UTF-8 trailing bytes to buffer for next call.
+        let tail = incomplete_utf8_tail_len(input);
+        let (to_feed, to_buffer) = input.split_at(input.len() - tail);
+
+        if !to_buffer.is_empty() {
+            self.utf8_buf[..to_buffer.len()].copy_from_slice(to_buffer);
+            self.utf8_buf_len = to_buffer.len() as u8;
+        }
+
+        if !to_feed.is_empty() {
+            let s = String::from_utf8_lossy(to_feed);
+            let _ = self.vt.feed_str(&s);
+        }
+
         self.seq += 1;
         self.changed = true;
     }
