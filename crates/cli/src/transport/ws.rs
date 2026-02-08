@@ -17,7 +17,6 @@ use base64::Engine;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;

@@ -20,14 +20,9 @@ use axum::middleware;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_util::sync::CancellationToken;
 
-use crate::driver::{AgentState, NudgeEncoder, PromptContext, RespondEncoder};
+use crate::driver::PromptContext;
 use crate::error::ErrorCode;
-use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
-use crate::ring::RingBuffer;
-use crate::screen::Screen;
 
 // ---------------------------------------------------------------------------
 // Helpers (shared between HTTP and gRPC)
