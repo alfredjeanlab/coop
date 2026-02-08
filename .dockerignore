@@ -1,0 +1,28 @@
+# Cargo config (sets sccache wrapper not available in container)
+.cargo/
+
+# Build artifacts
+target/
+
+# Git / CI
+.git/
+.github/
+.gitignore
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Caches
+.quench/
+.wok/
+.v0/
+
+# Coverage
+*.profraw
+*.profdata
+coverage/
