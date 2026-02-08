@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,14 @@ pub struct AppState {
     pub nudge_encoder: Option<Arc<dyn NudgeEncoder>>,
     pub respond_encoder: Option<Arc<dyn RespondEncoder>>,
     pub shutdown: CancellationToken,
+
+    // Detection metadata
+    pub state_seq: AtomicU64,
+    pub detection_tier: AtomicU8,
+    pub idle_grace_deadline: Arc<Mutex<Option<Instant>>>,
+    pub idle_grace_duration: Duration,
+    /// Lock-free mirror of `ring.total_written()` updated by the session loop.
+    pub ring_total_written: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for AppState {

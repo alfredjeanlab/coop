@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -38,6 +38,11 @@ fn make_app_state(input_tx: mpsc::Sender<crate::event::InputEvent>) -> Arc<AppSt
         nudge_encoder: None,
         respond_encoder: None,
         shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
     })
 }
 
@@ -55,6 +60,8 @@ async fn echo_exits_with_zero() -> anyhow::Result<()> {
         consumer_input_rx,
         cols: 80,
         rows: 24,
+        idle_grace: Duration::from_secs(60),
+        idle_timeout: Duration::ZERO,
         shutdown,
     });
 
@@ -77,6 +84,8 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
         consumer_input_rx,
         cols: 80,
         rows: 24,
+        idle_grace: Duration::from_secs(60),
+        idle_timeout: Duration::ZERO,
         shutdown,
     });
 
@@ -116,6 +125,8 @@ async fn shutdown_cancels_session() -> anyhow::Result<()> {
         consumer_input_rx,
         cols: 80,
         rows: 24,
+        idle_grace: Duration::from_secs(60),
+        idle_timeout: Duration::ZERO,
         shutdown: sd,
     });
 

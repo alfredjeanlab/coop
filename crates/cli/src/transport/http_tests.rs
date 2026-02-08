@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
@@ -40,6 +40,11 @@ fn test_state() -> (Arc<AppState>, mpsc::Receiver<InputEvent>) {
         nudge_encoder: None,
         respond_encoder: None,
         shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
     });
 
     (state, input_rx)
@@ -283,6 +288,11 @@ async fn auth_rejects_without_token() -> anyhow::Result<()> {
         nudge_encoder: None,
         respond_encoder: None,
         shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
     });
 
     let app = build_router(state);
@@ -342,6 +352,11 @@ fn test_state_with_nudge(agent: AgentState) -> (Arc<AppState>, mpsc::Receiver<In
         nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
         respond_encoder: None,
         shutdown: CancellationToken::new(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: Duration::from_secs(60),
+        ring_total_written: Arc::new(AtomicU64::new(0)),
     });
 
     (state, input_rx)

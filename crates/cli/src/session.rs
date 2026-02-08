@@ -15,7 +15,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::driver::{AgentState, Detector, ExitStatus};
+use crate::driver::grace::IdleGraceTimer;
+use crate::driver::{AgentState, CompositeDetector, DetectedState, Detector, ExitStatus};
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::pty::Backend;
 use crate::transport::AppState;
@@ -28,6 +29,8 @@ pub struct SessionConfig {
     pub consumer_input_rx: mpsc::Receiver<InputEvent>,
     pub cols: u16,
     pub rows: u16,
+    pub idle_grace: Duration,
+    pub idle_timeout: Duration,
     pub shutdown: CancellationToken,
 }
 
@@ -38,7 +41,8 @@ pub struct Session {
     backend_input_tx: mpsc::Sender<Bytes>,
     resize_tx: mpsc::Sender<(u16, u16)>,
     consumer_input_rx: mpsc::Receiver<InputEvent>,
-    detector_rx: mpsc::Receiver<AgentState>,
+    detector_rx: mpsc::Receiver<DetectedState>,
+    idle_timeout: Duration,
     shutdown: CancellationToken,
     backend_handle: JoinHandle<anyhow::Result<ExitStatus>>,
 }
@@ -59,6 +63,8 @@ impl Session {
             consumer_input_rx,
             cols,
             rows,
+            idle_grace,
+            idle_timeout,
             shutdown,
         } = config;
         // Set initial PID
@@ -83,16 +89,19 @@ impl Session {
                 .await
         });
 
-        // Create detector aggregation channel
+        // Build and spawn the composite detector (tier resolution + dedup).
         let (detector_tx, detector_rx) = mpsc::channel(64);
-
-        // Spawn each detector
+        let grace_timer = IdleGraceTimer::new(idle_grace);
+        let composite = CompositeDetector {
+            tiers: detectors,
+            grace_timer,
+        };
+        let ring_total = Arc::clone(&app_state.ring_total_written);
+        let activity_fn: Arc<dyn Fn() -> u64 + Send + Sync> =
+            Arc::new(move || ring_total.load(std::sync::atomic::Ordering::Relaxed));
+        let grace_deadline = Arc::clone(&app_state.idle_grace_deadline);
         let detector_shutdown = shutdown.clone();
-        for detector in detectors {
-            let tx = detector_tx.clone();
-            let sd = detector_shutdown.clone();
-            tokio::spawn(detector.run(tx, sd));
-        }
+        tokio::spawn(composite.run(detector_tx, activity_fn, grace_deadline, detector_shutdown));
 
         Self {
             app_state,
@@ -101,6 +110,7 @@ impl Session {
             resize_tx,
             consumer_input_rx,
             detector_rx,
+            idle_timeout,
             shutdown,
             backend_handle,
         }
@@ -110,6 +120,7 @@ impl Session {
     pub async fn run(mut self) -> anyhow::Result<ExitStatus> {
         let mut screen_debounce = tokio::time::interval(Duration::from_millis(50));
         let mut state_seq: u64 = 0;
+        let mut idle_since: Option<tokio::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -121,6 +132,11 @@ impl Session {
                             {
                                 let mut ring = self.app_state.ring.write().await;
                                 ring.write(&bytes);
+                                // Update atomic counter for lock-free activity tracking.
+                                self.app_state.ring_total_written.store(
+                                    ring.total_written(),
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
                             }
                             // Feed screen
                             {
@@ -174,19 +190,35 @@ impl Session {
                 }
 
                 // 3. Detector state changes → update agent_state, broadcast
-                state = self.detector_rx.recv() => {
-                    if let Some(new_state) = state {
+                //    CompositeDetector already applies tier resolution + dedup.
+                detected = self.detector_rx.recv() => {
+                    if let Some(detected) = detected {
                         state_seq += 1;
                         let mut current = self.app_state.agent_state.write().await;
                         let prev = current.clone();
-                        *current = new_state.clone();
+                        *current = detected.state.clone();
                         drop(current);
+
+                        // Store metadata for the HTTP/gRPC API.
+                        self.app_state.state_seq.store(state_seq, std::sync::atomic::Ordering::Relaxed);
+                        self.app_state.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Relaxed);
 
                         let _ = self.app_state.state_tx.send(StateChangeEvent {
                             prev,
-                            next: new_state,
+                            next: detected.state.clone(),
                             seq: state_seq,
                         });
+
+                        // Track idle time for idle_timeout.
+                        if matches!(detected.state, AgentState::WaitingForInput)
+                            && self.idle_timeout > Duration::ZERO
+                        {
+                            if idle_since.is_none() {
+                                idle_since = Some(tokio::time::Instant::now());
+                            }
+                        } else {
+                            idle_since = None;
+                        }
                     }
                 }
 
@@ -201,7 +233,19 @@ impl Session {
                     }
                 }
 
-                // 5. Shutdown signal
+                // 5. Idle timeout → trigger shutdown when idle too long
+                _ = async {
+                    match idle_since {
+                        Some(since) => tokio::time::sleep_until(since + self.idle_timeout).await,
+                        None => std::future::pending().await,
+                    }
+                }, if idle_since.is_some() => {
+                    debug!("idle timeout reached, triggering shutdown");
+                    self.shutdown.cancel();
+                    break;
+                }
+
+                // 6. Shutdown signal
                 _ = self.shutdown.cancelled() => {
                     debug!("shutdown signal received");
                     // Send SIGHUP to child

@@ -56,6 +56,7 @@ impl Detector for ProcessMonitor {
         Box::pin(async move {
             let mut interval = tokio::time::interval(self.poll_interval);
             let mut last_written = (self.ring_total_written)();
+            let mut was_active = false;
 
             loop {
                 tokio::select! {
@@ -64,8 +65,14 @@ impl Detector for ProcessMonitor {
                 }
 
                 let current_written = (self.ring_total_written)();
-                let _active = current_written > last_written;
+                let active = current_written > last_written;
                 last_written = current_written;
+
+                // Emit Working on rising edge (inactive → active).
+                if active && !was_active {
+                    let _ = state_tx.send(AgentState::Working).await;
+                }
+                was_active = active;
 
                 if let Some(pid) = (self.child_pid)() {
                     if !is_process_alive(pid) {

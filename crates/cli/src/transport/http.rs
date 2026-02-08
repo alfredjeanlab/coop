@@ -376,14 +376,37 @@ pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     let state = s.agent_state.read().await;
     let screen = s.screen.read().await;
 
+    let since_seq = s.state_seq.load(Ordering::Relaxed);
+    let tier = s.detection_tier.load(Ordering::Relaxed);
+    let tier_str = if tier == u8::MAX {
+        "none".to_owned()
+    } else {
+        tier.to_string()
+    };
+
+    let idle_grace_remaining_secs = {
+        let deadline = s
+            .idle_grace_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        deadline.map(|dl| {
+            let now = std::time::Instant::now();
+            if now < dl {
+                (dl - now).as_secs_f32()
+            } else {
+                0.0
+            }
+        })
+    };
+
     Json(AgentStateResponse {
         agent_type: s.agent_type.clone(),
         state: state.as_str().to_owned(),
-        since_seq: 0,
+        since_seq,
         screen_seq: screen.seq(),
-        detection_tier: "unknown".to_owned(),
+        detection_tier: tier_str,
         prompt: state.prompt().cloned(),
-        idle_grace_remaining_secs: None,
+        idle_grace_remaining_secs,
     })
     .into_response()
 }

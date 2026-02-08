@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -81,9 +81,30 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         Box::new(NativePty::spawn(&config.command, config.cols, config.rows)?)
     };
 
+    // Shared atomics created early so closures can reference them.
+    let child_pid = Arc::new(AtomicU32::new(0));
+    let ring_total_written = Arc::new(AtomicU64::new(0));
+
     // Build driver (detectors + encoders)
     let agent_type_enum = config.agent_type_enum()?;
-    let (nudge_encoder, respond_encoder, detectors) = build_driver(&config, agent_type_enum)?;
+    let pid_for_driver = Arc::clone(&child_pid);
+    let rtw_for_driver = Arc::clone(&ring_total_written);
+    let (nudge_encoder, respond_encoder, detectors) = build_driver(
+        &config,
+        agent_type_enum,
+        Arc::new(move || {
+            let v = pid_for_driver.load(std::sync::atomic::Ordering::Relaxed);
+            if v == 0 {
+                None
+            } else {
+                Some(v)
+            }
+        }),
+        Arc::new(move || rtw_for_driver.load(std::sync::atomic::Ordering::Relaxed)),
+    )?;
+
+    let idle_grace = Duration::from_secs(config.idle_grace);
+    let idle_timeout = Duration::from_secs(config.idle_timeout);
 
     // Create shared channels
     let (input_tx, consumer_input_rx) = mpsc::channel(256);
@@ -99,7 +120,7 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         input_tx,
         output_tx,
         state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
+        child_pid,
         exit_status: Arc::new(RwLock::new(None)),
         write_lock: Arc::new(WriteLock::new()),
         ws_client_count: Arc::new(AtomicI32::new(0)),
@@ -108,6 +129,11 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         nudge_encoder,
         respond_encoder,
         shutdown: shutdown.clone(),
+        state_seq: AtomicU64::new(0),
+        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
+        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
+        idle_grace_duration: idle_grace,
+        ring_total_written,
     });
 
     // Spawn HTTP server
@@ -235,6 +261,8 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
         consumer_input_rx,
         cols: config.cols,
         rows: config.rows,
+        idle_grace,
+        idle_timeout,
         shutdown,
     });
 
@@ -247,7 +275,12 @@ type DriverComponents = (
     Vec<Box<dyn Detector>>,
 );
 
-fn build_driver(config: &Config, agent_type: AgentType) -> anyhow::Result<DriverComponents> {
+fn build_driver(
+    config: &Config,
+    agent_type: AgentType,
+    child_pid_fn: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
+    ring_total_written_fn: Arc<dyn Fn() -> u64 + Send + Sync>,
+) -> anyhow::Result<DriverComponents> {
     match agent_type {
         AgentType::Claude => {
             let driver = ClaudeDriver::new(ClaudeDriverConfig {
@@ -264,15 +297,15 @@ fn build_driver(config: &Config, agent_type: AgentType) -> anyhow::Result<Driver
             // Unknown driver: no nudge/respond, minimal detectors
             let detectors = if let Some(ref agent_config) = config.agent_config {
                 coop::driver::unknown::build_detectors(
-                    Arc::new(|| None),
-                    Arc::new(|| 0),
+                    child_pid_fn,
+                    ring_total_written_fn,
                     Some(agent_config.as_path()),
                     None,
                 )?
             } else {
                 coop::driver::unknown::build_detectors(
-                    Arc::new(|| None),
-                    Arc::new(|| 0),
+                    child_pid_fn,
+                    ring_total_written_fn,
                     None,
                     None,
                 )?

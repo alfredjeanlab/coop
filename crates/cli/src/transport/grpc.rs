@@ -283,14 +283,38 @@ impl proto::coop_server::Coop for CoopGrpc {
         let agent = self.state.agent_state.read().await;
         let screen = self.state.screen.read().await;
 
+        let since_seq = self.state.state_seq.load(Ordering::Relaxed);
+        let tier = self.state.detection_tier.load(Ordering::Relaxed);
+        let detection_tier = if tier == u8::MAX {
+            "none".to_owned()
+        } else {
+            tier.to_string()
+        };
+
+        let idle_grace_remaining_secs = {
+            let deadline = self
+                .state
+                .idle_grace_deadline
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            deadline.map(|dl| {
+                let now = std::time::Instant::now();
+                if now < dl {
+                    (dl - now).as_secs_f32()
+                } else {
+                    0.0
+                }
+            })
+        };
+
         Ok(Response::new(proto::GetAgentStateResponse {
             agent_type: self.state.agent_type.clone(),
             state: agent.as_str().to_owned(),
-            since_seq: 0,
+            since_seq,
             screen_seq: screen.seq(),
-            detection_tier: String::new(),
+            detection_tier,
             prompt: agent.prompt().map(prompt_to_proto),
-            idle_grace_remaining_secs: None,
+            idle_grace_remaining_secs,
         }))
     }
 
