@@ -408,8 +408,22 @@ pub async fn agent_nudge(
         }
     };
 
-    let state = s.agent_state.read().await;
-    let state_before = state.as_str().to_owned();
+    let agent = s.agent_state.read().await;
+    let state_before = agent.as_str().to_owned();
+
+    match &*agent {
+        AgentState::WaitingForInput => {}
+        _ => {
+            return Json(NudgeResponse {
+                delivered: false,
+                state_before: Some(state_before),
+                reason: Some("agent_busy".to_owned()),
+            })
+            .into_response();
+        }
+    }
+    // Release the read lock before writing
+    drop(agent);
 
     let steps = encoder.encode(&req.message);
     for step in &steps {

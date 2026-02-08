@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use axum::http::StatusCode;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
-use crate::driver::AgentState;
+use crate::driver::{AgentState, NudgeEncoder, NudgeStep};
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::ring::RingBuffer;
 use crate::screen::Screen;
@@ -306,5 +306,76 @@ async fn auth_rejects_without_token() -> anyhow::Result<()> {
         .await;
     resp.assert_status(StatusCode::OK);
 
+    Ok(())
+}
+
+struct StubNudgeEncoder;
+impl NudgeEncoder for StubNudgeEncoder {
+    fn encode(&self, message: &str) -> Vec<NudgeStep> {
+        vec![NudgeStep {
+            bytes: message.as_bytes().to_vec(),
+            delay_after: None,
+        }]
+    }
+}
+
+fn test_state_with_nudge(agent: AgentState) -> (Arc<AppState>, mpsc::Receiver<InputEvent>) {
+    let (input_tx, input_rx) = mpsc::channel(16);
+    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
+    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
+
+    let state = Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
+        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
+        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
+        agent_state: Arc::new(RwLock::new(agent)),
+        input_tx,
+        output_tx,
+        state_tx,
+        child_pid: Arc::new(AtomicU32::new(1234)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: None,
+        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
+        respond_encoder: None,
+        shutdown: CancellationToken::new(),
+    });
+
+    (state, input_rx)
+}
+
+#[tokio::test]
+async fn agent_nudge_rejected_when_working() -> anyhow::Result<()> {
+    let (state, _rx) = test_state_with_nudge(AgentState::Working);
+    let app = build_router(state);
+    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let resp = server
+        .post("/api/v1/agent/nudge")
+        .json(&serde_json::json!({"message": "hello"}))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body = resp.text();
+    assert!(body.contains("\"delivered\":false"));
+    assert!(body.contains("agent_busy"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_nudge_delivered_when_waiting() -> anyhow::Result<()> {
+    let (state, _rx) = test_state_with_nudge(AgentState::WaitingForInput);
+    let app = build_router(state);
+    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let resp = server
+        .post("/api/v1/agent/nudge")
+        .json(&serde_json::json!({"message": "hello"}))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body = resp.text();
+    assert!(body.contains("\"delivered\":true"));
     Ok(())
 }
