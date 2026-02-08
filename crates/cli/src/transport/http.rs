@@ -18,7 +18,7 @@ use crate::error::ErrorCode;
 use crate::event::InputEvent;
 use crate::screen::CursorPosition;
 use crate::transport::state::AppState;
-use crate::transport::{error_response, keys_to_bytes};
+use crate::transport::{error_response, keys_to_bytes, parse_signal};
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -352,7 +352,7 @@ pub async fn signal(
     State(s): State<Arc<AppState>>,
     Json(req): Json<SignalRequest>,
 ) -> impl IntoResponse {
-    let signum = match signal_from_name(&req.signal) {
+    let signum = match parse_signal(&req.signal) {
         Some(n) => n,
         None => {
             return error_response(
@@ -491,21 +491,6 @@ pub async fn agent_respond(
         reason: None,
     })
     .into_response()
-}
-
-/// Map a signal name (e.g. "SIGINT", "SIGTERM") to its numeric value.
-fn signal_from_name(name: &str) -> Option<i32> {
-    let name = name.strip_prefix("SIG").unwrap_or(name);
-    match name.to_uppercase().as_str() {
-        "HUP" => Some(1),
-        "INT" => Some(2),
-        "QUIT" => Some(3),
-        "TERM" => Some(15),
-        "KILL" => Some(9),
-        "USR1" => Some(10),
-        "USR2" => Some(12),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

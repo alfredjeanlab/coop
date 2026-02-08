@@ -28,9 +28,10 @@ use crate::error::ErrorCode;
 // Helpers (shared between HTTP and gRPC)
 // ---------------------------------------------------------------------------
 
-/// Translate a named key to its terminal escape sequence.
+/// Translate a named key to its terminal escape sequence (case-insensitive).
 pub fn encode_key(name: &str) -> Option<Vec<u8>> {
-    let bytes: &[u8] = match name.to_lowercase().as_str() {
+    let lower = name.to_lowercase();
+    let bytes: &[u8] = match lower.as_str() {
         "enter" | "return" => b"\r",
         "tab" => b"\t",
         "escape" | "esc" => b"\x1b",
@@ -77,7 +78,17 @@ pub fn encode_key(name: &str) -> Option<Vec<u8>> {
         "ctrl-u" => b"\x15",
         "ctrl-w" => b"\x17",
         "ctrl-z" => b"\x1a",
-        _ => return None,
+        _ => {
+            // Generic Ctrl-<letter> handler for any letter not listed above
+            if let Some(ch_str) = lower.strip_prefix("ctrl-") {
+                let ch = ch_str.chars().next()?;
+                if ch.is_ascii_lowercase() {
+                    let ctrl = (ch.to_ascii_uppercase() as u8).wrapping_sub(b'@');
+                    return Some(vec![ctrl]);
+                }
+            }
+            return None;
+        }
     };
     Some(bytes.to_vec())
 }
@@ -179,31 +190,15 @@ pub fn error_response(
 // ---------------------------------------------------------------------------
 
 /// Convert named key sequences to raw bytes for PTY input.
+///
+/// Delegates to [`encode_key`] for each key; unrecognised strings are passed
+/// through as literal UTF-8 bytes.
 pub fn keys_to_bytes(keys: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for key in keys {
-        match key.as_str() {
-            "Enter" | "Return" => out.push(b'\r'),
-            "Tab" => out.push(b'\t'),
-            "Escape" | "Esc" => out.push(0x1b),
-            "Backspace" => out.push(0x7f),
-            "Delete" => out.extend_from_slice(b"\x1b[3~"),
-            "Up" => out.extend_from_slice(b"\x1b[A"),
-            "Down" => out.extend_from_slice(b"\x1b[B"),
-            "Right" => out.extend_from_slice(b"\x1b[C"),
-            "Left" => out.extend_from_slice(b"\x1b[D"),
-            "Home" => out.extend_from_slice(b"\x1b[H"),
-            "End" => out.extend_from_slice(b"\x1b[F"),
-            "PageUp" => out.extend_from_slice(b"\x1b[5~"),
-            "PageDown" => out.extend_from_slice(b"\x1b[6~"),
-            "Space" => out.push(b' '),
-            s if s.starts_with("Ctrl-") || s.starts_with("ctrl-") => {
-                if let Some(ch) = s.chars().last() {
-                    let ctrl = (ch.to_ascii_uppercase() as u8).wrapping_sub(b'@');
-                    out.push(ctrl);
-                }
-            }
-            other => out.extend_from_slice(other.as_bytes()),
+        match encode_key(key) {
+            Some(bytes) => out.extend_from_slice(&bytes),
+            None => out.extend_from_slice(key.as_bytes()),
         }
     }
     out
