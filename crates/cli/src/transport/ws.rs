@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
-//! WebSocket transport with subscription modes.
+//! WebSocket message types and handler for the coop real-time protocol.
+//!
+//! Messages use internally-tagged JSON enums (`{"type": "input", ...}`) as
+//! specified in DESIGN.md. Two top-level enums cover server-to-client and
+//! client-to-server directions.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -11,13 +18,16 @@ use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use base64::Engine;
 use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
-use super::{encode_key, AppState};
 use crate::driver::{AgentState, PromptContext};
+use crate::error::ErrorCode;
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::screen::CursorPosition;
+use crate::transport::auth;
+use crate::transport::keys_to_bytes;
+use crate::transport::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -119,11 +129,8 @@ pub enum SubscriptionMode {
     All,
 }
 
-// ---------------------------------------------------------------------------
-// Query params
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, Default)]
+/// Query parameters for WebSocket upgrade.
+#[derive(Debug, Clone, Deserialize)]
 pub struct WsQuery {
     #[serde(default)]
     pub mode: SubscriptionMode,
@@ -131,298 +138,370 @@ pub struct WsQuery {
 }
 
 // ---------------------------------------------------------------------------
-// Upgrade handler
+// WebSocket handler
 // ---------------------------------------------------------------------------
 
-pub async fn ws_upgrade(
+/// WebSocket upgrade handler. Validates auth from query params if configured.
+pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state, query))
-}
-
-async fn handle_ws(socket: WebSocket, state: Arc<AppState>, query: WsQuery) {
-    // Track WebSocket client count
-    state.ws_clients.fetch_add(1, Ordering::Relaxed);
-
-    let result = run_ws_loop(socket, &state, query).await;
-    if let Err(e) = result {
-        tracing::debug!("websocket session ended: {e}");
+    // Validate auth token from query param if one is required.
+    if state.auth_token.is_some() {
+        if let Some(ref token) = query.token {
+            if let Err(_code) = auth::validate_ws_auth(token, state.auth_token.as_deref()) {
+                return axum::http::Response::builder()
+                    .status(401)
+                    .body(axum::body::Body::from("unauthorized"))
+                    .unwrap_or_default()
+                    .into_response();
+            }
+        }
+        // If no token provided in query, the client can still auth via Auth message.
+        // We'll track auth state per-connection.
     }
 
-    state.ws_clients.fetch_sub(1, Ordering::Relaxed);
+    let mode = query.mode;
+    let needs_auth = state.auth_token.is_some() && query.token.is_none();
+
+    ws.on_upgrade(move |socket| {
+        let client_id = format!("ws-{}", uuid_v4_simple());
+        handle_connection(state, mode, socket, client_id, needs_auth)
+    })
+    .into_response()
 }
 
-async fn run_ws_loop(
-    mut socket: WebSocket,
-    state: &Arc<AppState>,
-    query: WsQuery,
-) -> anyhow::Result<()> {
-    let mode = query.mode;
+/// Per-connection event loop.
+async fn handle_connection(
+    state: Arc<AppState>,
+    mode: SubscriptionMode,
+    socket: WebSocket,
+    client_id: String,
+    needs_auth: bool,
+) {
+    state.ws_client_count.fetch_add(1, Ordering::Relaxed);
 
-    // Subscribe to broadcast channels based on mode
-    let mut output_rx = if matches!(mode, SubscriptionMode::Raw | SubscriptionMode::All) {
-        Some(state.output_tx.subscribe())
-    } else {
-        None
-    };
-
-    let mut state_rx = if matches!(mode, SubscriptionMode::State | SubscriptionMode::All) {
-        Some(state.state_tx.subscribe())
-    } else {
-        None
-    };
-
-    let mut screen_rx = if matches!(mode, SubscriptionMode::Screen | SubscriptionMode::All) {
-        Some(state.output_tx.subscribe())
-    } else {
-        None
-    };
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let mut output_rx = state.output_tx.subscribe();
+    let mut state_rx = state.state_tx.subscribe();
+    let mut authed = !needs_auth;
 
     loop {
         tokio::select! {
-            // Forward raw output to client
-            Some(event) = async {
-                if let Some(ref mut rx) = output_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<OutputEvent, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match event {
-                    Ok(OutputEvent::Raw(data)) => {
+            event = output_rx.recv() => {
+                let event = match event {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                match (&event, mode) {
+                    (OutputEvent::Raw(data), SubscriptionMode::Raw | SubscriptionMode::All) => {
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
                         let ring = state.ring.read().await;
-                        let offset = ring.total_written() - data.len() as u64;
-                        drop(ring);
-                        let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+                        let offset = ring.total_written().saturating_sub(data.len() as u64);
                         let msg = ServerMessage::Output { data: encoded, offset };
-                        send_json(&mut socket, &msg).await?;
+                        if send_json(&mut ws_tx, &msg).await.is_err() {
+                            break;
+                        }
                     }
-                    Ok(OutputEvent::ScreenUpdate { .. }) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-
-            // Forward screen updates to client
-            Some(event) = async {
-                if let Some(ref mut rx) = screen_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<OutputEvent, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match event {
-                    Ok(OutputEvent::ScreenUpdate { seq }) => {
-                        let screen = state.screen.read().await;
-                        let snap = screen.snapshot();
-                        drop(screen);
+                    (OutputEvent::ScreenUpdate { seq }, SubscriptionMode::Screen | SubscriptionMode::All) => {
+                        let snap = state.screen.read().await.snapshot();
                         let msg = ServerMessage::Screen {
                             lines: snap.lines,
                             cols: snap.cols,
                             rows: snap.rows,
                             alt_screen: snap.alt_screen,
                             cursor: Some(snap.cursor),
-                            seq,
+                            seq: *seq,
                         };
-                        send_json(&mut socket, &msg).await?;
-                    }
-                    Ok(OutputEvent::Raw(_)) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-
-            // Forward state changes to client
-            Some(event) = async {
-                if let Some(ref mut rx) = state_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<StateChangeEvent, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match event {
-                    Ok(change) => {
-                        let msg = ServerMessage::StateChange {
-                            prev: change.prev.as_str().to_owned(),
-                            next: change.next.as_str().to_owned(),
-                            seq: change.seq,
-                            prompt: change.next.prompt().cloned(),
-                        };
-                        send_json(&mut socket, &msg).await?;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-
-            // Handle incoming client messages
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                            handle_client_message(&mut socket, state, client_msg).await?;
-                        } else {
-                            let err = ServerMessage::Error {
-                                code: "BAD_REQUEST".to_owned(),
-                                message: "invalid message format".to_owned(),
-                            };
-                            send_json(&mut socket, &err).await?;
+                        if send_json(&mut ws_tx, &msg).await.is_err() {
+                            break;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(_)) => {} // Binary, Ping, Pong handled by axum
-                    Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
+            event = state_rx.recv() => {
+                let event = match event {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if matches!(mode, SubscriptionMode::State | SubscriptionMode::All) {
+                    let msg = state_change_to_msg(&event);
+                    if send_json(&mut ws_tx, &msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            msg = ws_rx.next() => {
+                let msg = match msg {
+                    Some(Ok(m)) => m,
+                    Some(Err(_)) | None => break,
+                };
+
+                match msg {
+                    Message::Text(text) => {
+                        let client_msg: ClientMessage = match serde_json::from_str(&text) {
+                            Ok(m) => m,
+                            Err(_) => {
+                                let err = ServerMessage::Error {
+                                    code: ErrorCode::BadRequest.as_str().to_owned(),
+                                    message: "invalid message".to_owned(),
+                                };
+                                if send_json(&mut ws_tx, &err).await.is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+
+                        if let Some(reply) = handle_client_message(&state, client_msg, &client_id, &mut authed).await {
+                            if send_json(&mut ws_tx, &reply).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
                 }
             }
         }
     }
 
-    Ok(())
+    // Cleanup
+    state.ws_client_count.fetch_sub(1, Ordering::Relaxed);
+    state.write_lock.force_release_ws(&client_id);
 }
 
+/// Handle a single client message and optionally return a reply.
 async fn handle_client_message(
-    socket: &mut WebSocket,
-    state: &Arc<AppState>,
+    state: &AppState,
     msg: ClientMessage,
-) -> anyhow::Result<()> {
+    client_id: &str,
+    authed: &mut bool,
+) -> Option<ServerMessage> {
     match msg {
-        ClientMessage::Input { text } => {
-            let _ = state
-                .input_tx
-                .send(InputEvent::Write(Bytes::from(text.into_bytes())))
-                .await;
-        }
-        ClientMessage::InputRaw { data } => {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&data) {
-                let _ = state
-                    .input_tx
-                    .send(InputEvent::Write(Bytes::from(decoded)))
-                    .await;
-            }
-        }
-        ClientMessage::Keys { keys } => {
-            for key in &keys {
-                if let Some(encoded) = encode_key(key) {
-                    let _ = state
-                        .input_tx
-                        .send(InputEvent::Write(Bytes::from(encoded)))
-                        .await;
+        ClientMessage::Ping {} => Some(ServerMessage::Pong {}),
+
+        ClientMessage::Auth { token } => {
+            match auth::validate_ws_auth(&token, state.auth_token.as_deref()) {
+                Ok(()) => {
+                    *authed = true;
+                    None
                 }
+                Err(code) => Some(ServerMessage::Error {
+                    code: code.as_str().to_owned(),
+                    message: "authentication failed".to_owned(),
+                }),
             }
         }
-        ClientMessage::Resize { cols, rows } => {
-            let _ = state.input_tx.send(InputEvent::Resize { cols, rows }).await;
-        }
+
         ClientMessage::ScreenRequest {} => {
-            let screen = state.screen.read().await;
-            let snap = screen.snapshot();
-            drop(screen);
-            let msg = ServerMessage::Screen {
+            let snap = state.screen.read().await.snapshot();
+            Some(ServerMessage::Screen {
                 lines: snap.lines,
                 cols: snap.cols,
                 rows: snap.rows,
                 alt_screen: snap.alt_screen,
                 cursor: Some(snap.cursor),
                 seq: snap.sequence,
-            };
-            send_json(socket, &msg).await?;
+            })
         }
+
         ClientMessage::StateRequest {} => {
             let agent = state.agent_state.read().await;
-            let msg = ServerMessage::StateChange {
+            let screen = state.screen.read().await;
+            Some(ServerMessage::StateChange {
                 prev: agent.as_str().to_owned(),
                 next: agent.as_str().to_owned(),
-                seq: 0,
+                seq: screen.seq(),
                 prompt: agent.prompt().cloned(),
-            };
-            send_json(socket, &msg).await?;
+            })
         }
-        ClientMessage::Nudge { message } => {
-            if let Some(encoder) = &state.nudge_encoder {
-                let agent = state.agent_state.read().await;
-                if matches!(&*agent, AgentState::WaitingForInput) {
-                    let steps = encoder.encode(&message);
-                    drop(agent);
-                    for step in steps {
-                        let _ = state
-                            .input_tx
-                            .send(InputEvent::Write(Bytes::from(step.bytes)))
-                            .await;
-                        if let Some(delay) = step.delay_after {
-                            tokio::time::sleep(delay).await;
-                        }
-                    }
-                }
+
+        ClientMessage::Replay { offset } => {
+            let ring = state.ring.read().await;
+            let data = ring.read_from(offset);
+            let (a, b) = data.unwrap_or((&[], &[]));
+            let mut combined = Vec::with_capacity(a.len() + b.len());
+            combined.extend_from_slice(a);
+            combined.extend_from_slice(b);
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
+            Some(ServerMessage::Output {
+                data: encoded,
+                offset,
+            })
+        }
+
+        // Write operations require auth and write lock
+        ClientMessage::Input { text } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            let data = Bytes::from(text.into_bytes());
+            let _ = state.input_tx.send(InputEvent::Write(data)).await;
+            None
+        }
+
+        ClientMessage::InputRaw { data } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&data)
+                .unwrap_or_default();
+            let _ = state
+                .input_tx
+                .send(InputEvent::Write(Bytes::from(decoded)))
+                .await;
+            None
+        }
+
+        ClientMessage::Keys { keys } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            let data = keys_to_bytes(&keys);
+            let _ = state
+                .input_tx
+                .send(InputEvent::Write(Bytes::from(data)))
+                .await;
+            None
+        }
+
+        ClientMessage::Resize { cols, rows } => {
+            let _ = state.input_tx.send(InputEvent::Resize { cols, rows }).await;
+            None
+        }
+
+        ClientMessage::Lock { action } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            match action {
+                LockAction::Acquire => match state.write_lock.acquire_ws(client_id) {
+                    Ok(()) => None,
+                    Err(code) => Some(ws_error(code, "write lock held by another client")),
+                },
+                LockAction::Release => match state.write_lock.release_ws(client_id) {
+                    Ok(()) => None,
+                    Err(code) => Some(ws_error(code, "not the lock owner")),
+                },
             }
         }
+
+        ClientMessage::Nudge { message } => {
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            let encoder = match &state.nudge_encoder {
+                Some(enc) => Arc::clone(enc),
+                None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
+            };
+            let steps = encoder.encode(&message);
+            for step in &steps {
+                let _ = state
+                    .input_tx
+                    .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
+                    .await;
+                if let Some(delay) = step.delay_after {
+                    tokio::time::sleep(delay).await;
+                }
+            }
+            None
+        }
+
         ClientMessage::Respond {
             accept,
             option,
             text,
         } => {
-            if let Some(encoder) = &state.respond_encoder {
-                let agent = state.agent_state.read().await;
-                let steps = match &*agent {
-                    AgentState::PermissionPrompt { .. } => {
-                        Some(encoder.encode_permission(accept.unwrap_or(false)))
-                    }
-                    AgentState::PlanPrompt { .. } => {
-                        Some(encoder.encode_plan(accept.unwrap_or(false), text.as_deref()))
-                    }
-                    AgentState::AskUser { .. } => {
-                        Some(encoder.encode_question(option.map(|o| o as u32), text.as_deref()))
-                    }
-                    _ => None,
-                };
-                drop(agent);
-                if let Some(steps) = steps {
-                    for step in steps {
-                        let _ = state
-                            .input_tx
-                            .send(InputEvent::Write(Bytes::from(step.bytes)))
-                            .await;
-                        if let Some(delay) = step.delay_after {
-                            tokio::time::sleep(delay).await;
-                        }
-                    }
+            if !*authed {
+                return Some(ws_error(ErrorCode::Unauthorized, "not authenticated"));
+            }
+            let encoder = match &state.respond_encoder {
+                Some(enc) => Arc::clone(enc),
+                None => return Some(ws_error(ErrorCode::NoDriver, "no agent driver configured")),
+            };
+            let agent = state.agent_state.read().await;
+            let steps = match &*agent {
+                AgentState::PermissionPrompt { .. } => {
+                    encoder.encode_permission(accept.unwrap_or(false))
+                }
+                AgentState::PlanPrompt { .. } => {
+                    encoder.encode_plan(accept.unwrap_or(false), text.as_deref())
+                }
+                AgentState::AskUser { .. } => {
+                    encoder.encode_question(option.map(|o| o as u32), text.as_deref())
+                }
+                _ => {
+                    return Some(ws_error(ErrorCode::NoPrompt, "no prompt active"));
+                }
+            };
+            drop(agent);
+            for step in &steps {
+                let _ = state
+                    .input_tx
+                    .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
+                    .await;
+                if let Some(delay) = step.delay_after {
+                    tokio::time::sleep(delay).await;
                 }
             }
-        }
-        ClientMessage::Replay { offset } => {
-            let ring = state.ring.read().await;
-            if let Some((a, b)) = ring.read_from(offset) {
-                let mut data = Vec::with_capacity(a.len() + b.len());
-                data.extend_from_slice(a);
-                data.extend_from_slice(b);
-                drop(ring);
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
-                let msg = ServerMessage::Output {
-                    data: encoded,
-                    offset,
-                };
-                send_json(socket, &msg).await?;
-            }
-        }
-        ClientMessage::Lock { .. } => {
-            // Writer lock not yet implemented; acknowledge silently
-        }
-        ClientMessage::Auth { .. } => {
-            // Auth handled via middleware/query param; acknowledge silently
-        }
-        ClientMessage::Ping {} => {
-            send_json(socket, &ServerMessage::Pong {}).await?;
+            None
         }
     }
-    Ok(())
 }
 
-async fn send_json(socket: &mut WebSocket, msg: &ServerMessage) -> anyhow::Result<()> {
-    let text = serde_json::to_string(msg)?;
-    socket
-        .send(Message::Text(text))
-        .await
-        .map_err(|e| anyhow::anyhow!("websocket send failed: {e}"))?;
-    Ok(())
+/// Build a WebSocket error message.
+fn ws_error(code: ErrorCode, message: &str) -> ServerMessage {
+    ServerMessage::Error {
+        code: code.as_str().to_owned(),
+        message: message.to_owned(),
+    }
 }
+
+/// Convert a `StateChangeEvent` to a `ServerMessage`.
+fn state_change_to_msg(event: &StateChangeEvent) -> ServerMessage {
+    let prompt = event.next.prompt().cloned();
+    match &event.next {
+        AgentState::Exited { status } => ServerMessage::Exit {
+            code: status.code,
+            signal: status.signal,
+        },
+        _ => ServerMessage::StateChange {
+            prev: event.prev.as_str().to_owned(),
+            next: event.next.as_str().to_owned(),
+            seq: event.seq,
+            prompt,
+        },
+    }
+}
+
+/// Send a JSON-serialized message over the WebSocket.
+async fn send_json<S>(tx: &mut S, msg: &ServerMessage) -> Result<(), ()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let text = match serde_json::to_string(msg) {
+        Ok(t) => t,
+        Err(_) => return Err(()),
+    };
+    tx.send(Message::Text(text.into())).await.map_err(|_| ())
+}
+
+/// Generate a simple unique ID (not cryptographic, just for client tracking).
+fn uuid_v4_simple() -> String {
+    use std::sync::atomic::AtomicU64;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{ts:x}-{n}")
+}
+
+#[cfg(test)]
+#[path = "ws_tests.rs"]
+mod tests;

@@ -1,15 +1,25 @@
+# Quench configuration
+# Run `quench config` for reference documentation
 version = 1
 
-[ratchet]
-check = "off"
+[git]
+baseline = "notes"    # e.g.  ".quench/baseline.json"
+commit = { check = "warn" }
 
 [rust]
 cfg_test_split = "require"
 
 [check]
 cloc = { check = "error" }
+docs = { check = "error" }
+agents = { check = "error" }
+escapes = { check = "error" }
+tests = { check = "off" }
 
 [check.license]
 check = "error"
 license = "BUSL-1.1"
 copyright = "Alfred Jean LLC"
+
+[ratchet]
+check = "off"

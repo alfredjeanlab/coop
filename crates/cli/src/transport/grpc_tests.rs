@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,6 +15,7 @@ use super::*;
 use crate::driver::AgentState;
 use crate::ring::RingBuffer;
 use crate::screen::{CursorPosition, Screen, ScreenSnapshot};
+use crate::transport::state::WriteLock;
 
 // ---------------------------------------------------------------------------
 // Type conversion tests
@@ -264,21 +268,23 @@ fn mock_app_state() -> Arc<AppState> {
     let (state_tx, _) = broadcast::channel(16);
 
     Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
         screen: Arc::new(RwLock::new(Screen::new(80, 24))),
         ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
+        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
         input_tx,
         output_tx,
         state_tx,
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        agent_type: "unknown".to_owned(),
-        pid: Arc::new(RwLock::new(None)),
-        start_time: Instant::now(),
+        child_pid: Arc::new(AtomicU32::new(0)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: None,
         nudge_encoder: None,
         respond_encoder: None,
-        ws_clients: AtomicI32::new(0),
-        bytes_written: AtomicU64::new(0),
         shutdown: CancellationToken::new(),
-        auth_token: None,
     })
 }
 

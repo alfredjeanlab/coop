@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
 //! Session loop: core runtime orchestrating PTY, screen, ring buffer,
@@ -61,14 +64,10 @@ impl Session {
             shutdown,
         } = config;
         // Set initial PID
-        let pid = backend.child_pid();
-        {
-            // Blocking write is fine at startup (no contention)
-            let pid_lock = app_state.pid.clone();
-            tokio::spawn(async move {
-                let mut w = pid_lock.write().await;
-                *w = pid;
-            });
+        if let Some(pid) = backend.child_pid() {
+            app_state
+                .child_pid
+                .store(pid, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Set initial terminal size
@@ -155,20 +154,16 @@ impl Session {
                             // We can't call backend.resize() since it's moved into the task.
                             // The resize will be handled via TIOCSWINSZ by the PTY fd owner.
                             // For now, send a SIGWINCH to the child process.
-                            let pid = *self.app_state.pid.read().await;
-                            if let Some(p) = pid {
-                                if let Ok(pid_val) = i32::try_from(p) {
-                                    let _ = kill(Pid::from_raw(pid_val), Signal::SIGWINCH);
-                                }
+                            let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                            if pid != 0 {
+                                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGWINCH);
                             }
                         }
                         Some(InputEvent::Signal(sig)) => {
-                            let pid = *self.app_state.pid.read().await;
-                            if let Some(p) = pid {
-                                if let Ok(pid_val) = i32::try_from(p) {
-                                    if let Some(signal) = signal_from_i32(sig) {
-                                        let _ = kill(Pid::from_raw(pid_val), signal);
-                                    }
+                            let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                            if pid != 0 {
+                                if let Some(signal) = signal_from_i32(sig) {
+                                    let _ = kill(Pid::from_raw(pid as i32), signal);
                                 }
                             }
                         }
@@ -211,11 +206,9 @@ impl Session {
                 _ = self.shutdown.cancelled() => {
                     debug!("shutdown signal received");
                     // Send SIGHUP to child
-                    let pid = *self.app_state.pid.read().await;
-                    if let Some(p) = pid {
-                        if let Ok(pid_val) = i32::try_from(p) {
-                            let _ = kill(Pid::from_raw(pid_val), Signal::SIGHUP);
-                        }
+                    let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                    if pid != 0 {
+                        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGHUP);
                     }
                     break;
                 }
@@ -242,17 +235,19 @@ impl Session {
             }
             _ = tokio::time::sleep(Duration::from_secs(10)) => {
                 warn!("backend did not exit within 10s, sending SIGKILL");
-                let pid = *self.app_state.pid.read().await;
-                if let Some(p) = pid {
-                    if let Ok(pid_val) = i32::try_from(p) {
-                        let _ = kill(Pid::from_raw(pid_val), Signal::SIGKILL);
-                    }
+                let pid = self.app_state.child_pid.load(std::sync::atomic::Ordering::Relaxed);
+                if pid != 0 {
+                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                 }
                 ExitStatus { code: Some(137), signal: Some(9) }
             }
         };
 
-        // Broadcast exited state
+        // Store exit status and broadcast exited state
+        {
+            let mut exit = self.app_state.exit_status.write().await;
+            *exit = Some(status);
+        }
         let mut current = self.app_state.agent_state.write().await;
         let prev = current.clone();
         *current = AgentState::Exited { status };

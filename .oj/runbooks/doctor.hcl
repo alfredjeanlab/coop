@@ -91,7 +91,7 @@ agent "doctor" {
 
     - Prefer resuming over cancelling
     - Use `oj` for jobs/workers, `gh` for issues/PRs
-    - Monitor a few cycles (30-60s each) before signaling complete
+    - If all lights are green, long-poll ~every 2 minutes
     - If truly stuck, signal escalate
     ROLE
 

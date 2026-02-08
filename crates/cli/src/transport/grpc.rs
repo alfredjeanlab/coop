@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
 //! gRPC transport implementing the `Coop` service defined in `coop.v1`.
@@ -12,10 +15,11 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use super::{encode_key, parse_signal, AppState};
+use super::{encode_key, parse_signal};
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
+use crate::transport::state::AppState;
 
 /// Generated protobuf types for the `coop.v1` package.
 pub mod proto {
@@ -121,13 +125,13 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         _request: Request<proto::GetHealthRequest>,
     ) -> Result<Response<proto::GetHealthResponse>, Status> {
-        let pid = *self.state.pid.read().await;
-        let uptime = self.state.start_time.elapsed().as_secs() as i64;
-        let ws = self.state.ws_clients.load(Ordering::Relaxed);
+        let pid = self.state.child_pid.load(Ordering::Relaxed);
+        let uptime = self.state.started_at.elapsed().as_secs() as i64;
+        let ws = self.state.ws_client_count.load(Ordering::Relaxed);
 
         Ok(Response::new(proto::GetHealthResponse {
             status: "ok".to_owned(),
-            pid: pid.map(|p| p as i32),
+            pid: if pid == 0 { None } else { Some(pid as i32) },
             uptime_secs: uptime,
             agent_type: self.state.agent_type.clone(),
             ws_clients: ws,
@@ -157,24 +161,21 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         _request: Request<proto::GetStatusRequest>,
     ) -> Result<Response<proto::GetStatusResponse>, Status> {
-        let pid = *self.state.pid.read().await;
+        let pid = self.state.child_pid.load(Ordering::Relaxed);
         let agent = self.state.agent_state.read().await;
         let screen = self.state.screen.read().await;
         let ring = self.state.ring.read().await;
-        let uptime = self.state.start_time.elapsed().as_secs() as i64;
+        let uptime = self.state.started_at.elapsed().as_secs() as i64;
+        let exit = self.state.exit_status.read().await;
 
-        let exit_code = if let AgentState::Exited { status } = &*agent {
-            status.code
-        } else {
-            None
-        };
+        let exit_code = exit.as_ref().and_then(|e| e.code);
 
         let bw = self.state.bytes_written.load(Ordering::Relaxed);
-        let ws = self.state.ws_clients.load(Ordering::Relaxed);
+        let ws = self.state.ws_client_count.load(Ordering::Relaxed);
 
         Ok(Response::new(proto::GetStatusResponse {
             state: agent.as_str().to_owned(),
-            pid: pid.map(|p| p as i32),
+            pid: if pid == 0 { None } else { Some(pid as i32) },
             uptime_secs: uptime,
             exit_code,
             screen_seq: screen.seq(),

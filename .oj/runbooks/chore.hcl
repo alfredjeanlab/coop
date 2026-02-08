@@ -1,34 +1,56 @@
-# GitHub-backed chore queue.
-#
-# File a chore via `gh issue create`, dispatch to workers.
+# GitHub Issues as a chore queue with PR-based merge.
 
 # File a GitHub chore and dispatch it to a worker.
 #
 # Examples:
 #   oj run chore "Update dependencies to latest versions"
-#   oj run chore "Add missing test coverage for auth module"
+#   oj run chore "Add missing test coverage for auth module" "Details here..."
+#   oj run chore "Cleanup after migration" --blocked 15
 command "github:chore" {
-  args = "<description>"
+  args = "<title> [body] [--blocked <numbers>]"
   run  = <<-SHELL
-    gh issue create --label type:chore --title "${args.description}"
-    oj worker start github:chore
+    labels="type:chore"
+    body="${args.body}"
+    _blocked="${args.blocked}"
+    if [ -n "$_blocked" ]; then
+      labels="$labels,blocked"
+      nums=$(echo "$_blocked" | tr ',' ' ')
+      refs=""
+      for n in $nums; do refs="$refs #$n"; done
+      if [ -n "$body" ]; then
+        body="$body\n\nBlocked by:$refs"
+      else
+        body="Blocked by:$refs"
+      fi
+    fi
+    if [ -n "$body" ]; then
+      gh issue create --label "$labels" --title "${args.title}" --body "$body"
+    else
+      gh issue create --label "$labels" --title "${args.title}"
+    fi
+    oj worker start chore
   SHELL
+
+  defaults = {
+    body    = ""
+    blocked = ""
+  }
 }
 
-queue "github:chores" {
+queue "chores" {
   type = "external"
-  list = "gh issue list --label type:chore --state open --json number,title --search '-label:in-progress'"
+  list = "gh issue list --label type:chore --state open --json number,title --search '-label:blocked -label:in-progress'"
   take = "gh issue edit ${item.number} --add-label in-progress"
   poll = "30s"
 }
 
-worker "github:chore" {
-  source      = { queue = "github:chores" }
-  handler     = { job = "github:chore" }
+worker "chore" {
+  source      = { queue = "chores" }
+  handler     = { job = "chore" }
   concurrency = 3
 }
 
-job "github:chore" {
+job "chore" {
   name      = "${var.task.title}"
   vars      = ["task"]
   on_fail   = { step = "reopen" }
@@ -50,6 +72,11 @@ job "github:chore" {
     on_fail  = "Chore failed: ${var.task.title}"
   }
 
+  step "sync" {
+    run     = "git fetch origin ${local.base} && git rebase origin/${local.base} || true"
+    on_done = { step = "work" }
+  }
+
   step "work" {
     run     = { agent = "chores" }
     on_done = { step = "submit" }
@@ -63,7 +90,7 @@ job "github:chore" {
         branch="${workspace.branch}"
         git push origin "$branch"
         gh pr create --title "${local.title}" --body "Closes #${var.task.number}" --head "$branch" --label merge:auto
-        oj worker start github:merge
+        gh pr merge --squash --auto
       elif gh issue view ${var.task.number} --json state -q '.state' | grep -q 'CLOSED'; then
         echo "Issue already resolved, no changes needed"
       else
@@ -92,7 +119,11 @@ agent "chores" {
   on_idle {
     action  = "nudge"
     message = <<-MSG
-      Keep working. Complete the task, verify with `make check`, then commit.
+      Keep working. Complete the task, write tests, verify with:
+      ```
+      make check
+      ```
+      Then commit your changes.
     MSG
   }
 
@@ -105,30 +136,19 @@ agent "chores" {
     }
   }
 
-  prime = <<-SHELL
-    cat <<'GATE'
-    ## Acceptance Gate
+  prime = [
+    "gh issue view ${var.task.number}",
+    <<-PRIME
+    echo '## Workflow'
+    echo
+    echo '1. Understand the task and find the relevant code'
+    echo '2. Implement the changes and write or update tests'
+    echo '3. Verify: `make check` — changes REJECTED if this fails'
+    echo '4. Commit your changes'
+    echo
+    echo 'If already completed by a prior commit, just commit a no-op.'
+    PRIME
+  ]
 
-    Your work is REJECTED if `make check` does not pass.
-    You MUST run `make check` and fix any failures before committing.
-    If you exit without a passing `make check`, the job will be retried.
-    GATE
-
-    echo ''
-    echo '## Issue'
-    gh issue view ${var.task.number}
-  SHELL
-
-  prompt = <<-PROMPT
-    Complete GitHub issue #${var.task.number}: ${var.task.title}
-
-    1. Understand the task
-    2. Find the relevant code
-    3. Implement the changes
-    4. Write or update tests
-    5. Verify: `make check` (MUST pass — this is your acceptance gate)
-    6. Commit your changes
-
-    If the task is already completed (e.g. by a prior commit), just commit a no-op.
-  PROMPT
+  prompt = "Complete GitHub issue #${var.task.number}: ${var.task.title}"
 }

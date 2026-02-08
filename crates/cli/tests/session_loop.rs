@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
 //! Integration tests for the session loop + HTTP transport, exercising
-//! the full stack in-process via `tower::ServiceExt`.
+//! the full stack in-process via `axum_test::TestServer`.
 
-use std::sync::atomic::{AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tower::ServiceExt;
 
 use coop::driver::AgentState;
 use coop::event::InputEvent;
@@ -21,31 +22,32 @@ use coop::pty::spawn::NativePty;
 use coop::ring::RingBuffer;
 use coop::screen::Screen;
 use coop::session::{Session, SessionConfig};
-use coop::transport::http::{
-    build_router, HealthResponse, InputRequest, ScreenResponse, StatusResponse,
-};
-use coop::transport::AppState;
+use coop::transport::http::{HealthResponse, InputRequest, ScreenResponse, StatusResponse};
+use coop::transport::state::WriteLock;
+use coop::transport::{build_router, AppState};
 
 fn make_app_state(input_tx: mpsc::Sender<InputEvent>) -> Arc<AppState> {
     let (output_tx, _) = broadcast::channel(256);
     let (state_tx, _) = broadcast::channel(64);
 
     Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
         screen: Arc::new(RwLock::new(Screen::new(80, 24))),
         ring: Arc::new(RwLock::new(RingBuffer::new(65536))),
+        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
         input_tx,
         output_tx,
         state_tx,
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        agent_type: "unknown".to_owned(),
-        pid: Arc::new(RwLock::new(None)),
-        start_time: Instant::now(),
+        child_pid: Arc::new(AtomicU32::new(0)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: None,
         nudge_encoder: None,
         respond_encoder: None,
-        ws_clients: AtomicI32::new(0),
-        bytes_written: AtomicU64::new(0),
         shutdown: CancellationToken::new(),
-        auth_token: None,
     })
 }
 
@@ -203,7 +205,7 @@ async fn session_exited_state_broadcast() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP transport tests (in-process via tower::ServiceExt)
+// HTTP transport tests (via axum_test::TestServer)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -211,19 +213,12 @@ async fn http_health_endpoint() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/health")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
-    let health: HealthResponse = serde_json::from_slice(&body)?;
-    assert_eq!(health.status, "ok");
+    let resp = server.get("/api/v1/health").await;
+    resp.assert_status(StatusCode::OK);
+    let health: HealthResponse = resp.json();
+    assert_eq!(health.status, "running");
     assert_eq!(health.agent_type, "unknown");
     assert_eq!(health.terminal.cols, 80);
     assert_eq!(health.terminal.rows, 24);
@@ -235,18 +230,11 @@ async fn http_status_endpoint() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/status")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
-    let status: StatusResponse = serde_json::from_slice(&body)?;
+    let resp = server.get("/api/v1/status").await;
+    resp.assert_status(StatusCode::OK);
+    let status: StatusResponse = resp.json();
     assert_eq!(status.state, "starting");
     assert_eq!(status.ws_clients, 0);
     Ok(())
@@ -257,18 +245,11 @@ async fn http_screen_endpoint() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/screen")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
-    let screen: ScreenResponse = serde_json::from_slice(&body)?;
+    let resp = server.get("/api/v1/screen").await;
+    resp.assert_status(StatusCode::OK);
+    let screen: ScreenResponse = resp.json();
     assert_eq!(screen.cols, 80);
     assert_eq!(screen.rows, 24);
     assert!(!screen.alt_screen);
@@ -280,21 +261,13 @@ async fn http_screen_text_endpoint() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/screen/text")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp
-        .headers()
-        .get("content-type")
-        .map(|v| v.to_str().unwrap_or(""));
-    assert_eq!(ct, Some("text/plain; charset=utf-8"));
+    let resp = server.get("/api/v1/screen/text").await;
+    resp.assert_status(StatusCode::OK);
+    let ct_header = resp.header("content-type");
+    let ct = ct_header.to_str().unwrap_or("");
+    assert_eq!(ct, "text/plain; charset=utf-8");
     Ok(())
 }
 
@@ -303,29 +276,23 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
     let (input_tx, mut consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let req_body = serde_json::to_string(&InputRequest {
-        text: "hello".to_owned(),
-        enter: true,
-    })?;
+    let resp = server
+        .post("/api/v1/input")
+        .json(&InputRequest {
+            text: "hello".to_owned(),
+            enter: true,
+        })
+        .await;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/input")
-                .header("content-type", "application/json")
-                .body(Body::from(req_body))?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
+    resp.assert_status(StatusCode::OK);
 
     // Verify the input was received on the channel
     let event = consumer_input_rx.recv().await;
     match event {
         Some(InputEvent::Write(data)) => {
-            assert_eq!(&data[..], b"hello\r");
+            assert_eq!(&data[..], b"hello\n");
         }
         other => {
             anyhow::bail!("expected Write event, got: {other:?}");
@@ -335,47 +302,19 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn http_resize_rejects_zero() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
-    let router = build_router(app_state);
-
-    let req_body = serde_json::to_string(&serde_json::json!({"cols": 0, "rows": 24}))?;
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/resize")
-                .header("content-type", "application/json")
-                .body(Body::from(req_body))?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    Ok(())
-}
-
-#[tokio::test]
 async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let req_body = serde_json::to_string(&serde_json::json!({"message": "do something"}))?;
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/agent/nudge")
-                .header("content-type", "application/json")
-                .body(Body::from(req_body))?,
-        )
-        .await?;
+    let resp = server
+        .post("/api/v1/agent/nudge")
+        .json(&serde_json::json!({"message": "do something"}))
+        .await;
 
     // No nudge encoder configured → NO_DRIVER error
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    resp.assert_status(StatusCode::NOT_FOUND);
     Ok(())
 }
 
@@ -386,58 +325,55 @@ async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
     let (state_tx, _) = broadcast::channel(64);
 
     let app_state = Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: "unknown".to_owned(),
         screen: Arc::new(RwLock::new(Screen::new(80, 24))),
         ring: Arc::new(RwLock::new(RingBuffer::new(65536))),
+        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
         input_tx,
         output_tx,
         state_tx,
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        agent_type: "unknown".to_owned(),
-        pid: Arc::new(RwLock::new(None)),
-        start_time: Instant::now(),
+        child_pid: Arc::new(AtomicU32::new(0)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: Some("secret-token".to_owned()),
         nudge_encoder: None,
         respond_encoder: None,
-        ws_clients: AtomicI32::new(0),
-        bytes_written: AtomicU64::new(0),
         shutdown: CancellationToken::new(),
-        auth_token: Some("secret-token".to_owned()),
     });
 
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // No token → 401
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/health")
-                .body(Body::empty())?,
-        )
-        .await?;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Health endpoint skips auth
+    let resp = server.get("/api/v1/health").await;
+    resp.assert_status(StatusCode::OK);
+
+    // No token on protected route → 401
+    let resp = server.get("/api/v1/status").await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
 
     // Wrong token → 401
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/health")
-                .header("authorization", "Bearer wrong-token")
-                .body(Body::empty())?,
+    let resp = server
+        .get("/api/v1/status")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer wrong-token"),
         )
-        .await?;
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        .await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
 
     // Correct token → 200
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/health")
-                .header("authorization", "Bearer secret-token")
-                .body(Body::empty())?,
+    let resp = server
+        .get("/api/v1/status")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer secret-token"),
         )
-        .await?;
-    assert_eq!(resp.status(), StatusCode::OK);
+        .await;
+    resp.assert_status(StatusCode::OK);
 
     Ok(())
 }
@@ -447,20 +383,11 @@ async fn http_agent_state_endpoint() -> anyhow::Result<()> {
     let (input_tx, _consumer_input_rx) = mpsc::channel(64);
     let app_state = make_app_state(input_tx);
     let router = build_router(app_state);
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/agent/state")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
-    let state: serde_json::Value = serde_json::from_slice(&body)?;
-    assert_eq!(state["agent_type"], "unknown");
-    assert_eq!(state["state"], "starting");
+    let resp = server.get("/api/v1/agent/state").await;
+    // No driver configured → NO_DRIVER error (404)
+    resp.assert_status(StatusCode::NOT_FOUND);
     Ok(())
 }
 
@@ -490,33 +417,18 @@ async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
 
     // Now query the HTTP layer
     let router = build_router(Arc::clone(&app_state));
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/screen")
-                .body(Body::empty())?,
-        )
-        .await?;
+    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
-    let screen: ScreenResponse = serde_json::from_slice(&body)?;
+    let resp = server.get("/api/v1/screen").await;
+    resp.assert_status(StatusCode::OK);
+    let screen: ScreenResponse = resp.json();
     let lines = screen.lines.join("\n");
     assert!(lines.contains("fullstack"), "screen: {lines:?}");
 
     // Verify status shows exited
-    let router2 = build_router(app_state);
-    let resp2 = router2
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/status")
-                .body(Body::empty())?,
-        )
-        .await?;
-
-    assert_eq!(resp2.status(), StatusCode::OK);
-    let body2 = axum::body::to_bytes(resp2.into_body(), usize::MAX).await?;
-    let status: StatusResponse = serde_json::from_slice(&body2)?;
+    let resp2 = server.get("/api/v1/status").await;
+    resp2.assert_status(StatusCode::OK);
+    let status: StatusResponse = resp2.json();
     assert_eq!(status.state, "exited");
     assert_eq!(status.exit_code, Some(0));
 

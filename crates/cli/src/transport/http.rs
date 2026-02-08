@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
 //! HTTP request/response types and axum handler implementations.
@@ -7,20 +10,18 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use base64::Engine;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::auth::auth_middleware;
-use super::{encode_key, parse_signal, AppState, ErrorResponse};
 use crate::driver::{AgentState, PromptContext};
 use crate::error::ErrorCode;
 use crate::event::InputEvent;
 use crate::screen::CursorPosition;
+use crate::transport::state::AppState;
+use crate::transport::{error_response, keys_to_bytes};
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -176,89 +177,48 @@ pub struct RespondResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
-
-/// Build the axum router with all HTTP endpoints.
-pub fn build_router(state: Arc<AppState>) -> Router {
-    let auth_token: Option<Arc<str>> = state.auth_token.as_deref().map(Arc::from);
-
-    Router::new()
-        .route("/api/v1/health", get(handle_health))
-        .route("/api/v1/screen", get(handle_screen))
-        .route("/api/v1/screen/text", get(handle_screen_text))
-        .route("/api/v1/output", get(handle_output))
-        .route("/api/v1/status", get(handle_status))
-        .route("/api/v1/input", post(handle_input))
-        .route("/api/v1/input/keys", post(handle_keys))
-        .route("/api/v1/resize", post(handle_resize))
-        .route("/api/v1/signal", post(handle_signal))
-        .route("/api/v1/agent/state", get(handle_agent_state))
-        .route("/api/v1/agent/nudge", post(handle_nudge))
-        .route("/api/v1/agent/respond", post(handle_respond))
-        .route("/ws", get(super::ws::ws_upgrade))
-        .layer(axum::middleware::from_fn_with_state(
-            auth_token,
-            auth_middleware,
-        ))
-        .with_state(state)
-}
-
-/// Build a minimal health-only router (for `--health-port`).
-pub fn build_health_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/api/v1/health", get(handle_health))
-        .with_state(state)
-}
-
-// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let pid = *state.pid.read().await;
-    let uptime = state.start_time.elapsed().as_secs() as i64;
-    let screen = state.screen.read().await;
-    let snap = screen.snapshot();
-    let ws = state.ws_clients.load(Ordering::Relaxed);
+/// `GET /api/v1/health`
+pub async fn health(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let snap = s.screen.read().await.snapshot();
+    let pid = s.child_pid.load(Ordering::Relaxed);
+    let uptime = s.started_at.elapsed().as_secs() as i64;
 
     Json(HealthResponse {
-        status: "ok".to_owned(),
-        pid: pid.map(|p| p as i32),
+        status: "running".to_owned(),
+        pid: if pid == 0 { None } else { Some(pid as i32) },
         uptime_secs: uptime,
-        agent_type: state.agent_type.clone(),
+        agent_type: s.agent_type.clone(),
         terminal: TerminalSize {
             cols: snap.cols,
             rows: snap.rows,
         },
-        ws_clients: ws,
+        ws_clients: s.ws_client_count.load(Ordering::Relaxed),
     })
 }
 
-async fn handle_screen(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<ScreenQuery>,
-) -> Json<ScreenResponse> {
-    let screen = state.screen.read().await;
-    let snap = screen.snapshot();
+/// `GET /api/v1/screen`
+pub async fn screen(
+    State(s): State<Arc<AppState>>,
+    Query(q): Query<ScreenQuery>,
+) -> impl IntoResponse {
+    let snap = s.screen.read().await.snapshot();
 
     Json(ScreenResponse {
         lines: snap.lines,
         cols: snap.cols,
         rows: snap.rows,
         alt_screen: snap.alt_screen,
-        cursor: if query.cursor {
-            Some(snap.cursor)
-        } else {
-            None
-        },
+        cursor: if q.cursor { Some(snap.cursor) } else { None },
         sequence: snap.sequence,
     })
 }
 
-async fn handle_screen_text(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let screen = state.screen.read().await;
-    let snap = screen.snapshot();
+/// `GET /api/v1/screen/text`
+pub async fn screen_text(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let snap = s.screen.read().await.snapshot();
     let text = snap.lines.join("\n");
     (
         [(
@@ -269,247 +229,288 @@ async fn handle_screen_text(State(state): State<Arc<AppState>>) -> impl IntoResp
     )
 }
 
-async fn handle_output(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<OutputQuery>,
-) -> Result<Json<OutputResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let ring = state.ring.read().await;
+/// `GET /api/v1/output`
+pub async fn output(
+    State(s): State<Arc<AppState>>,
+    Query(q): Query<OutputQuery>,
+) -> impl IntoResponse {
+    let ring = s.ring.read().await;
     let total = ring.total_written();
 
-    let data = match ring.read_from(query.offset) {
-        Some((a, b)) => {
-            let mut buf = Vec::with_capacity(a.len() + b.len());
-            buf.extend_from_slice(a);
-            buf.extend_from_slice(b);
-            if let Some(limit) = query.limit {
-                buf.truncate(limit);
-            }
-            buf
-        }
-        None => Vec::new(),
-    };
+    let data = ring.read_from(q.offset);
+    let (a, b) = data.unwrap_or((&[], &[]));
 
-    let next_offset = query.offset + data.len() as u64;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    let mut combined = Vec::with_capacity(a.len() + b.len());
+    combined.extend_from_slice(a);
+    combined.extend_from_slice(b);
 
-    Ok(Json(OutputResponse {
+    if let Some(limit) = q.limit {
+        combined.truncate(limit);
+    }
+
+    let read_len = combined.len() as u64;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&combined);
+
+    Json(OutputResponse {
         data: encoded,
-        offset: query.offset,
-        next_offset,
+        offset: q.offset,
+        next_offset: q.offset + read_len,
         total_written: total,
-    }))
-}
-
-async fn handle_status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
-    let pid = *state.pid.read().await;
-    let agent = state.agent_state.read().await;
-    let screen = state.screen.read().await;
-    let ring = state.ring.read().await;
-
-    let exit_code = if let AgentState::Exited { status } = &*agent {
-        status.code
-    } else {
-        None
-    };
-
-    let bw = state.bytes_written.load(Ordering::Relaxed);
-    let ws = state.ws_clients.load(Ordering::Relaxed);
-
-    Json(StatusResponse {
-        state: agent.as_str().to_owned(),
-        pid: pid.map(|p| p as i32),
-        exit_code,
-        screen_seq: screen.seq(),
-        bytes_read: ring.total_written(),
-        bytes_written: bw,
-        ws_clients: ws,
     })
 }
 
-async fn handle_input(
-    State(state): State<Arc<AppState>>,
+/// `GET /api/v1/status`
+pub async fn status(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let agent = s.agent_state.read().await;
+    let ring = s.ring.read().await;
+    let screen = s.screen.read().await;
+    let pid = s.child_pid.load(Ordering::Relaxed);
+    let exit = s.exit_status.read().await;
+    let bw = s.bytes_written.load(Ordering::Relaxed);
+
+    let state_str = match &*agent {
+        AgentState::Exited { .. } => "exited",
+        _ => {
+            if pid == 0 {
+                "starting"
+            } else {
+                "running"
+            }
+        }
+    };
+
+    Json(StatusResponse {
+        state: state_str.to_owned(),
+        pid: if pid == 0 { None } else { Some(pid as i32) },
+        exit_code: exit.as_ref().and_then(|e| e.code),
+        screen_seq: screen.seq(),
+        bytes_read: ring.total_written(),
+        bytes_written: bw,
+        ws_clients: s.ws_client_count.load(Ordering::Relaxed),
+    })
+}
+
+/// `POST /api/v1/input`
+pub async fn input(
+    State(s): State<Arc<AppState>>,
     Json(req): Json<InputRequest>,
-) -> Result<(StatusCode, Json<InputResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let mut payload = req.text.into_bytes();
+) -> impl IntoResponse {
+    let _guard = match s.write_lock.acquire_http() {
+        Ok(g) => g,
+        Err(code) => {
+            return error_response(code, "write lock held by another client").into_response()
+        }
+    };
+
+    let mut data = req.text.into_bytes();
     if req.enter {
-        payload.push(b'\r');
+        data.push(b'\n');
     }
-    let len = payload.len() as i32;
-    state
-        .input_tx
-        .send(InputEvent::Write(Bytes::from(payload)))
-        .await
-        .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
-    Ok((StatusCode::OK, Json(InputResponse { bytes_written: len })))
+    let len = data.len() as i32;
+    let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;
+
+    Json(InputResponse { bytes_written: len }).into_response()
 }
 
-async fn handle_keys(
-    State(state): State<Arc<AppState>>,
+/// `POST /api/v1/input/keys`
+pub async fn input_keys(
+    State(s): State<Arc<AppState>>,
     Json(req): Json<KeysRequest>,
-) -> Result<(StatusCode, Json<KeysResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let mut total = 0i32;
-    for key in &req.keys {
-        let encoded = encode_key(key)
-            .ok_or_else(|| ErrorCode::BadRequest.to_http_response(format!("unknown key: {key}")))?;
-        total += encoded.len() as i32;
-        state
-            .input_tx
-            .send(InputEvent::Write(Bytes::from(encoded)))
-            .await
-            .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
-    }
-    Ok((
-        StatusCode::OK,
-        Json(KeysResponse {
-            bytes_written: total,
-        }),
-    ))
+) -> impl IntoResponse {
+    let _guard = match s.write_lock.acquire_http() {
+        Ok(g) => g,
+        Err(code) => {
+            return error_response(code, "write lock held by another client").into_response()
+        }
+    };
+
+    let data = keys_to_bytes(&req.keys);
+    let len = data.len() as i32;
+    let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;
+
+    Json(KeysResponse { bytes_written: len }).into_response()
 }
 
-async fn handle_resize(
-    State(state): State<Arc<AppState>>,
+/// `POST /api/v1/resize`
+pub async fn resize(
+    State(s): State<Arc<AppState>>,
     Json(req): Json<ResizeRequest>,
-) -> Result<(StatusCode, Json<ResizeResponse>), (StatusCode, Json<ErrorResponse>)> {
-    if req.cols == 0 || req.rows == 0 {
-        return Err(ErrorCode::BadRequest.to_http_response("cols and rows must be positive"));
-    }
-    state
+) -> impl IntoResponse {
+    let _ = s
         .input_tx
         .send(InputEvent::Resize {
             cols: req.cols,
             rows: req.rows,
         })
-        .await
-        .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
-    Ok((
-        StatusCode::OK,
-        Json(ResizeResponse {
-            cols: req.cols,
-            rows: req.rows,
-        }),
-    ))
-}
+        .await;
 
-async fn handle_signal(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SignalRequest>,
-) -> Result<(StatusCode, Json<SignalResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let signum = parse_signal(&req.signal).ok_or_else(|| {
-        ErrorCode::BadRequest.to_http_response(format!("unknown signal: {}", req.signal))
-    })?;
-    state
-        .input_tx
-        .send(InputEvent::Signal(signum))
-        .await
-        .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
-    Ok((StatusCode::OK, Json(SignalResponse { delivered: true })))
-}
-
-async fn handle_agent_state(State(state): State<Arc<AppState>>) -> Json<AgentStateResponse> {
-    let agent = state.agent_state.read().await;
-    let screen = state.screen.read().await;
-
-    Json(AgentStateResponse {
-        agent_type: state.agent_type.clone(),
-        state: agent.as_str().to_owned(),
-        since_seq: 0,
-        screen_seq: screen.seq(),
-        detection_tier: String::new(),
-        prompt: agent.prompt().cloned(),
-        idle_grace_remaining_secs: None,
+    Json(ResizeResponse {
+        cols: req.cols,
+        rows: req.rows,
     })
 }
 
-async fn handle_nudge(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<NudgeRequest>,
-) -> Result<Json<NudgeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let agent = state.agent_state.read().await;
-    let state_before = Some(agent.as_str().to_owned());
-
-    let encoder = state
-        .nudge_encoder
-        .as_ref()
-        .ok_or_else(|| ErrorCode::NoDriver.to_http_response("no nudge encoder configured"))?;
-
-    match &*agent {
-        AgentState::WaitingForInput => {}
-        other => {
-            return Ok(Json(NudgeResponse {
-                delivered: false,
-                state_before,
-                reason: Some(format!("agent is {}", other.as_str())),
-            }));
+/// `POST /api/v1/signal`
+pub async fn signal(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<SignalRequest>,
+) -> impl IntoResponse {
+    let signum = match signal_from_name(&req.signal) {
+        Some(n) => n,
+        None => {
+            return error_response(
+                ErrorCode::BadRequest,
+                format!("unknown signal: {}", req.signal),
+            )
+            .into_response()
         }
+    };
+
+    let _ = s.input_tx.send(InputEvent::Signal(signum)).await;
+    Json(SignalResponse { delivered: true }).into_response()
+}
+
+/// `GET /api/v1/agent/state`
+pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    if s.nudge_encoder.is_none() && s.respond_encoder.is_none() {
+        return error_response(ErrorCode::NoDriver, "no agent driver configured").into_response();
     }
 
-    let steps = encoder.encode(&req.message);
-    drop(agent);
+    let state = s.agent_state.read().await;
+    let screen = s.screen.read().await;
 
-    for step in steps {
-        state
+    Json(AgentStateResponse {
+        agent_type: s.agent_type.clone(),
+        state: state.as_str().to_owned(),
+        since_seq: 0,
+        screen_seq: screen.seq(),
+        detection_tier: "unknown".to_owned(),
+        prompt: state.prompt().cloned(),
+        idle_grace_remaining_secs: None,
+    })
+    .into_response()
+}
+
+/// `POST /api/v1/agent/nudge`
+pub async fn agent_nudge(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<NudgeRequest>,
+) -> impl IntoResponse {
+    let encoder = match &s.nudge_encoder {
+        Some(enc) => Arc::clone(enc),
+        None => {
+            return error_response(ErrorCode::NoDriver, "no agent driver configured")
+                .into_response()
+        }
+    };
+
+    let _guard = match s.write_lock.acquire_http() {
+        Ok(g) => g,
+        Err(code) => {
+            return error_response(code, "write lock held by another client").into_response()
+        }
+    };
+
+    let state = s.agent_state.read().await;
+    let state_before = state.as_str().to_owned();
+
+    let steps = encoder.encode(&req.message);
+    for step in &steps {
+        let _ = s
             .input_tx
-            .send(InputEvent::Write(Bytes::from(step.bytes)))
-            .await
-            .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
+            .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
+            .await;
         if let Some(delay) = step.delay_after {
             tokio::time::sleep(delay).await;
         }
     }
 
-    Ok(Json(NudgeResponse {
+    Json(NudgeResponse {
         delivered: true,
-        state_before,
+        state_before: Some(state_before),
         reason: None,
-    }))
+    })
+    .into_response()
 }
 
-async fn handle_respond(
-    State(state): State<Arc<AppState>>,
+/// `POST /api/v1/agent/respond`
+pub async fn agent_respond(
+    State(s): State<Arc<AppState>>,
     Json(req): Json<RespondRequest>,
-) -> Result<Json<RespondResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let agent = state.agent_state.read().await;
+) -> impl IntoResponse {
+    let encoder = match &s.respond_encoder {
+        Some(enc) => Arc::clone(enc),
+        None => {
+            return error_response(ErrorCode::NoDriver, "no agent driver configured")
+                .into_response()
+        }
+    };
 
-    let encoder = state
-        .respond_encoder
-        .as_ref()
-        .ok_or_else(|| ErrorCode::NoDriver.to_http_response("no respond encoder configured"))?;
+    let _guard = match s.write_lock.acquire_http() {
+        Ok(g) => g,
+        Err(code) => {
+            return error_response(code, "write lock held by another client").into_response()
+        }
+    };
 
-    let steps = match &*agent {
+    let state = s.agent_state.read().await;
+    let prompt = state.prompt();
+    if prompt.is_none() {
+        return error_response(ErrorCode::NoPrompt, "no prompt active").into_response();
+    }
+
+    let prompt_type = state.as_str().to_owned();
+
+    let steps = match &*state {
         AgentState::PermissionPrompt { .. } => {
-            let accept = req.accept.unwrap_or(false);
-            encoder.encode_permission(accept)
+            encoder.encode_permission(req.accept.unwrap_or(false))
         }
         AgentState::PlanPrompt { .. } => {
-            let accept = req.accept.unwrap_or(false);
-            encoder.encode_plan(accept, req.text.as_deref())
+            encoder.encode_plan(req.accept.unwrap_or(false), req.text.as_deref())
         }
         AgentState::AskUser { .. } => {
             encoder.encode_question(req.option.map(|o| o as u32), req.text.as_deref())
         }
-        other => {
-            return Err(ErrorCode::NoPrompt
-                .to_http_response(format!("agent is {} (no active prompt)", other.as_str())));
+        _ => {
+            return error_response(ErrorCode::NoPrompt, "no prompt active").into_response();
         }
     };
 
-    let prompt_type = Some(agent.as_str().to_owned());
-    drop(agent);
+    drop(state);
 
-    for step in steps {
-        state
+    for step in &steps {
+        let _ = s
             .input_tx
-            .send(InputEvent::Write(Bytes::from(step.bytes)))
-            .await
-            .map_err(|_| ErrorCode::WriterBusy.to_http_response("input channel closed"))?;
+            .send(InputEvent::Write(Bytes::from(step.bytes.clone())))
+            .await;
         if let Some(delay) = step.delay_after {
             tokio::time::sleep(delay).await;
         }
     }
 
-    Ok(Json(RespondResponse {
+    Json(RespondResponse {
         delivered: true,
-        prompt_type,
+        prompt_type: Some(prompt_type),
         reason: None,
-    }))
+    })
+    .into_response()
 }
+
+/// Map a signal name (e.g. "SIGINT", "SIGTERM") to its numeric value.
+fn signal_from_name(name: &str) -> Option<i32> {
+    let name = name.strip_prefix("SIG").unwrap_or(name);
+    match name.to_uppercase().as_str() {
+        "HUP" => Some(1),
+        "INT" => Some(2),
+        "QUIT" => Some(3),
+        "TERM" => Some(15),
+        "KILL" => Some(9),
+        "USR1" => Some(10),
+        "USR2" => Some(12),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "http_tests.rs"]
+mod tests;

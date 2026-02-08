@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
+// SPDX-License-Identifier: BUSL-1.1
 // Copyright 2025 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,8 +24,8 @@ use coop::ring::RingBuffer;
 use coop::screen::Screen;
 use coop::session::Session;
 use coop::transport::grpc::CoopGrpc;
-use coop::transport::http::{build_health_router, build_router};
-use coop::transport::AppState;
+use coop::transport::state::WriteLock;
+use coop::transport::{build_health_router, build_router, AppState};
 
 #[tokio::main]
 async fn main() {
@@ -91,21 +94,23 @@ async fn run(config: Config) -> anyhow::Result<coop::driver::ExitStatus> {
     let (state_tx, _) = broadcast::channel(64);
 
     let app_state = Arc::new(AppState {
+        started_at: Instant::now(),
+        agent_type: config.agent_type.clone(),
         screen: Arc::new(RwLock::new(Screen::new(config.cols, config.rows))),
         ring: Arc::new(RwLock::new(RingBuffer::new(config.ring_size))),
+        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
         input_tx,
         output_tx,
         state_tx,
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        agent_type: config.agent_type.clone(),
-        pid: Arc::new(RwLock::new(None)),
-        start_time: Instant::now(),
+        child_pid: Arc::new(AtomicU32::new(0)),
+        exit_status: Arc::new(RwLock::new(None)),
+        write_lock: Arc::new(WriteLock::new()),
+        ws_client_count: Arc::new(AtomicI32::new(0)),
+        bytes_written: AtomicU64::new(0),
+        auth_token: config.auth_token.clone(),
         nudge_encoder,
         respond_encoder,
-        ws_clients: AtomicI32::new(0),
-        bytes_written: AtomicU64::new(0),
         shutdown: shutdown.clone(),
-        auth_token: config.auth_token.clone(),
     });
 
     // Spawn HTTP server

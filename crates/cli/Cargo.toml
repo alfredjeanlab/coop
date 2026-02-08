@@ -35,6 +35,7 @@ prost.workspace = true
 regex.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+futures-util.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
@@ -45,6 +46,7 @@ reqwest.workspace = true
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 yare.workspace = true
+axum-test.workspace = true
 
 [lints]
 workspace = true

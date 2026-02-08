@@ -9,7 +9,7 @@
 check:
 	cargo fmt --all
 	cargo clippy --all -- -D warnings
-	quench check --fix --no-cloc
+	quench check --fix
 	cargo build --all
 	cargo test --all
 
@@ -26,6 +26,10 @@ ci:
 # Format code
 fmt:
 	cargo fmt --all
+
+# Add license headers (--ci required for --license)
+license:
+	quench check --ci --fix --license
 
 # Build and install coop to ~/.local/bin
 install:
