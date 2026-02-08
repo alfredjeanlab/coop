@@ -31,6 +31,12 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
+    "CC0-1.0",
+]
+
+# Our own crate uses BUSL-1.1
+exceptions = [
+    { allow = ["BUSL-1.1"], crate = "coop" },
 ]
 
 [bans]
@@ -38,7 +44,10 @@ multiple-versions = "deny"
 wildcards = "deny"
 
 skip = [
-    # as needed
+    # bitflags 1.x pulled by inotify (via notify), while 2.x is used by nix et al.
+    { crate = "bitflags@1" },
+    # hashbrown 0.15 pulled by petgraph (via prost-build), while 0.16 is used by indexmap
+    { crate = "hashbrown@0.15" },
 ]
 
 [sources]
