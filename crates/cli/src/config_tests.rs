@@ -34,42 +34,15 @@ fn valid_config_with_attach() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
-fn invalid_no_transport() {
-    let config = parse(&["coop", "--", "echo"]);
-    let err = config.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("--port or --socket"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn invalid_no_command_or_attach() {
-    let config = parse(&["coop", "--port", "8080"]);
-    let err = config.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("command or --attach"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn invalid_both_command_and_attach() {
-    let config = parse(&[
-        "coop",
-        "--port",
-        "8080",
-        "--attach",
-        "tmux:sess",
-        "--",
-        "echo",
-    ]);
-    let err = config.validate().unwrap_err();
-    assert!(
-        err.to_string().contains("cannot specify both"),
-        "unexpected error: {err}"
-    );
+#[yare::parameterized(
+    no_transport        = { &["coop", "--", "echo"], "--port or --socket" },
+    no_command          = { &["coop", "--port", "8080"], "command or --attach" },
+    both_cmd_and_attach = { &["coop", "--port", "8080", "--attach", "tmux:sess", "--", "echo"],
+                            "cannot specify both" },
+)]
+fn invalid_config(args: &[&str], expected_substr: &str) {
+    let config = parse(args);
+    crate::assert_err_contains!(config.validate(), expected_substr);
 }
 
 #[test]

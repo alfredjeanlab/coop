@@ -1,18 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_util::sync::CancellationToken;
 
 use crate::driver::{AgentState, NudgeEncoder, NudgeStep};
-use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
-use crate::ring::RingBuffer;
-use crate::screen::Screen;
-use crate::transport::state::{AppState, WriteLock};
+use crate::test_support::{AnyhowExt, TestAppStateBuilder};
 use crate::transport::ws::{
     handle_client_message, ClientMessage, LockAction, ServerMessage, SubscriptionMode,
 };
@@ -20,11 +12,11 @@ use crate::transport::ws::{
 #[test]
 fn ping_pong_serialization() -> anyhow::Result<()> {
     let msg = ClientMessage::Ping {};
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"ping\""));
 
     let pong = ServerMessage::Pong {};
-    let json = serde_json::to_string(&pong).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&pong).anyhow()?;
     assert!(json.contains("\"type\":\"pong\""));
     Ok(())
 }
@@ -32,7 +24,7 @@ fn ping_pong_serialization() -> anyhow::Result<()> {
 #[test]
 fn screen_request_serialization() -> anyhow::Result<()> {
     let msg = ClientMessage::ScreenRequest {};
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"screen_request\""));
     Ok(())
 }
@@ -43,7 +35,7 @@ fn output_message_serialization() -> anyhow::Result<()> {
         data: "aGVsbG8=".to_owned(),
         offset: 0,
     };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"output\""));
     assert!(json.contains("\"data\":\"aGVsbG8=\""));
     Ok(())
@@ -57,7 +49,7 @@ fn state_change_serialization() -> anyhow::Result<()> {
         seq: 42,
         prompt: None,
     };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"state_change\""));
     assert!(json.contains("\"prev\":\"working\""));
     assert!(json.contains("\"next\":\"waiting_for_input\""));
@@ -69,21 +61,20 @@ fn lock_acquire_release_serialization() -> anyhow::Result<()> {
     let acquire = ClientMessage::Lock {
         action: LockAction::Acquire,
     };
-    let json = serde_json::to_string(&acquire).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&acquire).anyhow()?;
     assert!(json.contains("\"action\":\"acquire\""));
 
     let release = ClientMessage::Lock {
         action: LockAction::Release,
     };
-    let json = serde_json::to_string(&release).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&release).anyhow()?;
     assert!(json.contains("\"action\":\"release\""));
     Ok(())
 }
 
 #[test]
 fn subscription_mode_default_is_all() -> anyhow::Result<()> {
-    let mode: SubscriptionMode =
-        serde_json::from_str("\"all\"").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mode: SubscriptionMode = serde_json::from_str("\"all\"").anyhow()?;
     assert_eq!(mode, SubscriptionMode::All);
     assert_eq!(SubscriptionMode::default(), SubscriptionMode::All);
     Ok(())
@@ -91,16 +82,13 @@ fn subscription_mode_default_is_all() -> anyhow::Result<()> {
 
 #[test]
 fn subscription_modes_deserialize() -> anyhow::Result<()> {
-    let raw: SubscriptionMode =
-        serde_json::from_str("\"raw\"").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let raw: SubscriptionMode = serde_json::from_str("\"raw\"").anyhow()?;
     assert_eq!(raw, SubscriptionMode::Raw);
 
-    let screen: SubscriptionMode =
-        serde_json::from_str("\"screen\"").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let screen: SubscriptionMode = serde_json::from_str("\"screen\"").anyhow()?;
     assert_eq!(screen, SubscriptionMode::Screen);
 
-    let state: SubscriptionMode =
-        serde_json::from_str("\"state\"").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let state: SubscriptionMode = serde_json::from_str("\"state\"").anyhow()?;
     assert_eq!(state, SubscriptionMode::State);
     Ok(())
 }
@@ -111,7 +99,7 @@ fn error_message_serialization() -> anyhow::Result<()> {
         code: "WRITER_BUSY".to_owned(),
         message: "write lock held".to_owned(),
     };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"error\""));
     assert!(json.contains("\"code\":\"WRITER_BUSY\""));
     Ok(())
@@ -123,7 +111,7 @@ fn exit_message_serialization() -> anyhow::Result<()> {
         code: Some(0),
         signal: None,
     };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"exit\""));
     assert!(json.contains("\"code\":0"));
     Ok(())
@@ -132,7 +120,7 @@ fn exit_message_serialization() -> anyhow::Result<()> {
 #[test]
 fn replay_message_serialization() -> anyhow::Result<()> {
     let msg = ClientMessage::Replay { offset: 1024 };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"replay\""));
     assert!(json.contains("\"offset\":1024"));
     Ok(())
@@ -143,7 +131,7 @@ fn auth_message_serialization() -> anyhow::Result<()> {
     let msg = ClientMessage::Auth {
         token: "secret123".to_owned(),
     };
-    let json = serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let json = serde_json::to_string(&msg).anyhow()?;
     assert!(json.contains("\"type\":\"auth\""));
     assert!(json.contains("\"token\":\"secret123\""));
     Ok(())
@@ -187,37 +175,17 @@ impl NudgeEncoder for StubNudgeEncoder {
     }
 }
 
-fn ws_test_state(agent: AgentState) -> (AppState, mpsc::Receiver<InputEvent>) {
-    let (input_tx, input_rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
-    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
-
-    let state = AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(agent)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(1234)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    };
-
-    (state, input_rx)
+fn ws_test_state(
+    agent: AgentState,
+) -> (
+    Arc<crate::transport::state::AppState>,
+    tokio::sync::mpsc::Receiver<crate::event::InputEvent>,
+) {
+    TestAppStateBuilder::new()
+        .child_pid(1234)
+        .agent_state(agent)
+        .nudge_encoder(Arc::new(StubNudgeEncoder))
+        .build()
 }
 
 #[tokio::test]
@@ -252,10 +220,7 @@ async fn resize_zero_rows_returns_error() -> anyhow::Result<()> {
 async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::Working);
     let client_id = "test-ws";
-    state
-        .write_lock
-        .acquire_ws(client_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    state.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Nudge {
         message: "hello".to_owned(),
@@ -274,10 +239,7 @@ async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
 async fn nudge_accepted_when_agent_waiting() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::WaitingForInput);
     let client_id = "test-ws";
-    state
-        .write_lock
-        .acquire_ws(client_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    state.write_lock.acquire_ws(client_id).anyhow()?;
 
     let msg = ClientMessage::Nudge {
         message: "hello".to_owned(),

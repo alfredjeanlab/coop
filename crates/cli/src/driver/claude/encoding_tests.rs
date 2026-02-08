@@ -24,20 +24,15 @@ fn nudge_with_multiline_message() {
     assert_eq!(steps[0].bytes, b"line1\nline2\r");
 }
 
-#[test]
-fn permission_accept() {
+#[yare::parameterized(
+    accept = { true, b"y\r" as &[u8] },
+    deny   = { false, b"n\r" },
+)]
+fn permission_encoding(accept: bool, expected: &[u8]) {
     let encoder = ClaudeRespondEncoder;
-    let steps = encoder.encode_permission(true);
+    let steps = encoder.encode_permission(accept);
     assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0].bytes, b"y\r");
-}
-
-#[test]
-fn permission_deny() {
-    let encoder = ClaudeRespondEncoder;
-    let steps = encoder.encode_permission(false);
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0].bytes, b"n\r");
+    assert_eq!(steps[0].bytes, expected);
 }
 
 #[test]

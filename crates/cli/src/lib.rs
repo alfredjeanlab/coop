@@ -9,4 +9,5 @@ pub mod pty;
 pub mod ring;
 pub mod screen;
 pub mod session;
+pub mod test_support;
 pub mod transport;

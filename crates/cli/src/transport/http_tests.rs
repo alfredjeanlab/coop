@@ -1,60 +1,27 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use tokio_util::sync::CancellationToken;
 
 use axum::http::StatusCode;
-use tokio::sync::{broadcast, mpsc, RwLock};
 
 use crate::driver::{AgentState, NudgeEncoder, NudgeStep};
-use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
-use crate::ring::RingBuffer;
-use crate::screen::Screen;
+use crate::event::InputEvent;
+use crate::test_support::{AnyhowExt, TestAppStateBuilder};
 use crate::transport::build_router;
-use crate::transport::state::{AppState, WriteLock};
 
-fn test_state() -> (Arc<AppState>, mpsc::Receiver<InputEvent>) {
-    let (input_tx, input_rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
-    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
-
-    let state = Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(1234)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    });
-
-    (state, input_rx)
+fn test_state() -> (
+    Arc<crate::transport::state::AppState>,
+    tokio::sync::mpsc::Receiver<InputEvent>,
+) {
+    TestAppStateBuilder::new().child_pid(1234).build()
 }
 
 #[tokio::test]
 async fn health_200() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/health").await;
     resp.assert_status(StatusCode::OK);
@@ -68,7 +35,7 @@ async fn health_200() -> anyhow::Result<()> {
 async fn screen_snapshot() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/screen").await;
     resp.assert_status(StatusCode::OK);
@@ -82,7 +49,7 @@ async fn screen_snapshot() -> anyhow::Result<()> {
 async fn screen_text_plain() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/screen/text").await;
     resp.assert_status(StatusCode::OK);
@@ -103,7 +70,7 @@ async fn output_with_offset() -> anyhow::Result<()> {
         ring.write(b"hello world");
     }
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/output?offset=0").await;
     resp.assert_status(StatusCode::OK);
@@ -116,7 +83,7 @@ async fn output_with_offset() -> anyhow::Result<()> {
 async fn input_sends_event() -> anyhow::Result<()> {
     let (state, mut rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/input")
@@ -135,7 +102,7 @@ async fn input_sends_event() -> anyhow::Result<()> {
 async fn keys_sends_event() -> anyhow::Result<()> {
     let (state, mut rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/input/keys")
@@ -154,7 +121,7 @@ async fn keys_sends_event() -> anyhow::Result<()> {
 async fn resize_sends_event() -> anyhow::Result<()> {
     let (state, mut rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/resize")
@@ -177,7 +144,7 @@ async fn resize_sends_event() -> anyhow::Result<()> {
 async fn signal_delivers() -> anyhow::Result<()> {
     let (state, mut rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/signal")
@@ -196,7 +163,7 @@ async fn signal_delivers() -> anyhow::Result<()> {
 async fn status_running() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/status").await;
     resp.assert_status(StatusCode::OK);
@@ -209,7 +176,7 @@ async fn status_running() -> anyhow::Result<()> {
 async fn agent_state_no_driver_404() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server.get("/api/v1/agent/state").await;
     resp.assert_status(StatusCode::NOT_FOUND);
@@ -220,7 +187,7 @@ async fn agent_state_no_driver_404() -> anyhow::Result<()> {
 async fn agent_nudge_no_driver_404() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/agent/nudge")
@@ -234,7 +201,7 @@ async fn agent_nudge_no_driver_404() -> anyhow::Result<()> {
 async fn agent_respond_no_driver_404() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/agent/respond")
@@ -248,13 +215,10 @@ async fn agent_respond_no_driver_404() -> anyhow::Result<()> {
 async fn write_endpoint_conflict_409() -> anyhow::Result<()> {
     let (state, _rx) = test_state();
     // Pre-acquire the write lock via WS
-    state
-        .write_lock
-        .acquire_ws("other-client")
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    state.write_lock.acquire_ws("other-client").anyhow()?;
 
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/input")
@@ -266,37 +230,13 @@ async fn write_endpoint_conflict_409() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn auth_rejects_without_token() -> anyhow::Result<()> {
-    let (input_tx, _rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
-    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
-
-    let state = Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(1234)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: Some("secret".to_owned()),
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    });
+    let (state, _rx) = TestAppStateBuilder::new()
+        .child_pid(1234)
+        .auth_token("secret")
+        .build();
 
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     // Health should be accessible without auth
     let resp = server.get("/api/v1/health").await;
@@ -329,44 +269,15 @@ impl NudgeEncoder for StubNudgeEncoder {
     }
 }
 
-fn test_state_with_nudge(agent: AgentState) -> (Arc<AppState>, mpsc::Receiver<InputEvent>) {
-    let (input_tx, input_rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel::<OutputEvent>(16);
-    let (state_tx, _) = broadcast::channel::<StateChangeEvent>(16);
-
-    let state = Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(agent)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(1234)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    });
-
-    (state, input_rx)
-}
-
 #[tokio::test]
 async fn agent_nudge_rejected_when_working() -> anyhow::Result<()> {
-    let (state, _rx) = test_state_with_nudge(AgentState::Working);
+    let (state, _rx) = TestAppStateBuilder::new()
+        .child_pid(1234)
+        .agent_state(AgentState::Working)
+        .nudge_encoder(Arc::new(StubNudgeEncoder))
+        .build();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/agent/nudge")
@@ -381,9 +292,13 @@ async fn agent_nudge_rejected_when_working() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn agent_nudge_delivered_when_waiting() -> anyhow::Result<()> {
-    let (state, _rx) = test_state_with_nudge(AgentState::WaitingForInput);
+    let (state, _rx) = TestAppStateBuilder::new()
+        .child_pid(1234)
+        .agent_state(AgentState::WaitingForInput)
+        .nudge_encoder(Arc::new(StubNudgeEncoder))
+        .build();
     let app = build_router(state);
-    let server = axum_test::TestServer::new(app).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(app).anyhow()?;
 
     let resp = server
         .post("/api/v1/agent/nudge")

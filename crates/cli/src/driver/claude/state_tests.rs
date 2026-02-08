@@ -7,75 +7,50 @@ use crate::driver::AgentState;
 
 use super::parse_claude_state;
 
-#[test]
-fn error_field_produces_error_state() {
-    let entry = json!({ "error": "rate_limit_exceeded" });
-    let state = parse_claude_state(&entry);
-    assert_eq!(
-        state,
-        Some(AgentState::Error {
-            detail: "rate_limit_exceeded".to_string()
-        })
-    );
-}
-
-#[test]
-fn error_field_non_string_uses_unknown() {
-    let entry = json!({ "error": 42 });
-    let state = parse_claude_state(&entry);
-    assert_eq!(
-        state,
-        Some(AgentState::Error {
-            detail: "unknown".to_string()
-        })
-    );
-}
-
-#[test]
-fn system_message_produces_working() {
-    let entry = json!({
-        "type": "system",
-        "message": { "content": [] }
-    });
-    assert_eq!(parse_claude_state(&entry), Some(AgentState::Working));
-}
-
-#[test]
-fn user_message_produces_working() {
-    let entry = json!({
-        "type": "user",
-        "message": { "content": [{ "type": "text", "text": "hello" }] }
-    });
-    assert_eq!(parse_claude_state(&entry), Some(AgentState::Working));
-}
-
-#[test]
-fn assistant_with_tool_use_produces_working() {
-    let entry = json!({
-        "type": "assistant",
-        "message": {
-            "content": [{
-                "type": "tool_use",
-                "name": "Bash",
-                "input": { "command": "ls" }
-            }]
-        }
-    });
-    assert_eq!(parse_claude_state(&entry), Some(AgentState::Working));
-}
-
-#[test]
-fn assistant_with_thinking_produces_working() {
-    let entry = json!({
-        "type": "assistant",
-        "message": {
-            "content": [{
-                "type": "thinking",
-                "thinking": "Let me consider..."
-            }]
-        }
-    });
-    assert_eq!(parse_claude_state(&entry), Some(AgentState::Working));
+#[yare::parameterized(
+    error_string = {
+        json!({ "error": "rate_limit_exceeded" }),
+        Some(AgentState::Error { detail: "rate_limit_exceeded".to_string() })
+    },
+    error_non_string = {
+        json!({ "error": 42 }),
+        Some(AgentState::Error { detail: "unknown".to_string() })
+    },
+    system_message = {
+        json!({ "type": "system", "message": { "content": [] } }),
+        Some(AgentState::Working)
+    },
+    user_message = {
+        json!({ "type": "user", "message": { "content": [{ "type": "text", "text": "hello" }] } }),
+        Some(AgentState::Working)
+    },
+    assistant_tool_use = {
+        json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "name": "Bash", "input": { "command": "ls" } }] } }),
+        Some(AgentState::Working)
+    },
+    assistant_thinking = {
+        json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "Let me consider..." }] } }),
+        Some(AgentState::Working)
+    },
+    assistant_text_only = {
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Here is the result." }] } }),
+        Some(AgentState::WaitingForInput)
+    },
+    empty_content = {
+        json!({ "type": "assistant", "message": { "content": [] } }),
+        Some(AgentState::WaitingForInput)
+    },
+    missing_message = {
+        json!({ "type": "assistant" }),
+        None
+    },
+    missing_content = {
+        json!({ "type": "assistant", "message": {} }),
+        None
+    },
+)]
+fn state_from_jsonl(entry: serde_json::Value, expected: Option<AgentState>) {
+    assert_eq!(parse_claude_state(&entry), expected);
 }
 
 #[test]
@@ -107,52 +82,4 @@ fn assistant_with_ask_user_produces_ask_user() {
         }
         other => panic!("expected AskUser, got {other:?}"),
     }
-}
-
-#[test]
-fn assistant_with_only_text_produces_waiting() {
-    let entry = json!({
-        "type": "assistant",
-        "message": {
-            "content": [{
-                "type": "text",
-                "text": "Here is the result."
-            }]
-        }
-    });
-    assert_eq!(
-        parse_claude_state(&entry),
-        Some(AgentState::WaitingForInput)
-    );
-}
-
-#[test]
-fn malformed_json_missing_message_returns_none() {
-    let entry = json!({
-        "type": "assistant"
-    });
-    assert_eq!(parse_claude_state(&entry), None);
-}
-
-#[test]
-fn malformed_json_missing_content_returns_none() {
-    let entry = json!({
-        "type": "assistant",
-        "message": {}
-    });
-    assert_eq!(parse_claude_state(&entry), None);
-}
-
-#[test]
-fn empty_content_array_produces_waiting() {
-    let entry = json!({
-        "type": "assistant",
-        "message": {
-            "content": []
-        }
-    });
-    assert_eq!(
-        parse_claude_state(&entry),
-        Some(AgentState::WaitingForInput)
-    );
 }

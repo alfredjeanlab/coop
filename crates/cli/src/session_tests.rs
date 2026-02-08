@@ -1,55 +1,22 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::AgentState;
 use crate::pty::spawn::NativePty;
-use crate::ring::RingBuffer;
-use crate::screen::Screen;
 use crate::session::{Session, SessionConfig};
-use crate::transport::state::WriteLock;
-use crate::transport::AppState;
-
-fn make_app_state(input_tx: mpsc::Sender<crate::event::InputEvent>) -> Arc<AppState> {
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-
-    Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(65536))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    })
-}
+use crate::test_support::TestAppStateBuilder;
 
 #[tokio::test]
 async fn echo_exits_with_zero() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24)?;
@@ -73,7 +40,9 @@ async fn echo_exits_with_zero() -> anyhow::Result<()> {
 #[tokio::test]
 async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "hello-ring".into()], 80, 24)?;
@@ -112,7 +81,9 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
 #[tokio::test]
 async fn shutdown_cancels_session() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     // Long-running command

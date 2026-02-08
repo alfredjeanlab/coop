@@ -1,18 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::driver::AgentState;
-use crate::ring::RingBuffer;
-use crate::screen::{CursorPosition, Screen, ScreenSnapshot};
-use crate::transport::state::WriteLock;
+use crate::screen::{CursorPosition, ScreenSnapshot};
+use crate::test_support::{AnyhowExt, TestAppStateBuilder};
 
 // ---------------------------------------------------------------------------
 // Type conversion tests
@@ -259,40 +253,9 @@ fn parse_signal_case_insensitive() {
 // Service instantiation (compile-time type chain test)
 // ---------------------------------------------------------------------------
 
-fn mock_app_state() -> Arc<AppState> {
-    let (input_tx, _input_rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel(16);
-    let (state_tx, _) = broadcast::channel(16);
-
-    Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    })
-}
-
 #[test]
 fn service_instantiation_compiles() {
-    let state = mock_app_state();
+    let state = TestAppStateBuilder::new().build().0;
     let service = CoopGrpc::new(state);
     // Verify we can construct a tonic server from the service
     let _router = service.into_router();
@@ -337,34 +300,12 @@ impl RespondEncoder for StubRespondEncoder {
 }
 
 fn mock_app_state_with_encoders(agent: AgentState) -> Arc<AppState> {
-    let (input_tx, _input_rx) = mpsc::channel(16);
-    let (output_tx, _) = broadcast::channel(16);
-    let (state_tx, _) = broadcast::channel(16);
-
-    Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(4096))),
-        agent_state: Arc::new(RwLock::new(agent)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: Some(Arc::new(StubNudgeEncoder)),
-        respond_encoder: Some(Arc::new(StubRespondEncoder)),
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    })
+    TestAppStateBuilder::new()
+        .agent_state(agent)
+        .nudge_encoder(Arc::new(StubNudgeEncoder))
+        .respond_encoder(Arc::new(StubRespondEncoder))
+        .build()
+        .0
 }
 
 #[tokio::test]
@@ -373,10 +314,7 @@ async fn nudge_fails_when_write_lock_held() -> anyhow::Result<()> {
 
     let state = mock_app_state_with_encoders(AgentState::WaitingForInput);
     // Simulate another client holding the write lock
-    state
-        .write_lock
-        .acquire_ws("other-client")
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    state.write_lock.acquire_ws("other-client").anyhow()?;
 
     let service = CoopGrpc::new(state);
     let req = Request::new(proto::NudgeRequest {
@@ -404,10 +342,7 @@ async fn respond_fails_when_write_lock_held() -> anyhow::Result<()> {
         screen_lines: vec![],
     };
     let state = mock_app_state_with_encoders(AgentState::PermissionPrompt { prompt });
-    state
-        .write_lock
-        .acquire_ws("other-client")
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    state.write_lock.acquire_ws("other-client").anyhow()?;
 
     let service = CoopGrpc::new(state);
     let req = Request::new(proto::RespondRequest {

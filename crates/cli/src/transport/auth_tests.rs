@@ -4,115 +4,69 @@
 use axum::http::HeaderMap;
 
 use crate::error::ErrorCode;
+use crate::test_support::AnyhowExt;
 use crate::transport::auth::{validate_bearer, validate_ws_auth, validate_ws_query};
 
-#[test]
-fn no_token_allows_all() -> anyhow::Result<()> {
-    let headers = HeaderMap::new();
-    assert!(validate_bearer(&headers, None).is_ok());
-    Ok(())
-}
-
-#[test]
-fn valid_bearer_passes() -> anyhow::Result<()> {
+#[yare::parameterized(
+    no_token_allows_all = { None, None, true },
+    valid_bearer        = { Some("secret123"), Some("Bearer secret123"), true },
+    invalid_bearer      = { Some("secret123"), Some("Bearer wrong"), false },
+    missing_header      = { Some("secret123"), None, false },
+    wrong_scheme        = { Some("secret123"), Some("Basic dXNlcjpwYXNz"), false },
+)]
+fn bearer_validation(
+    expected_token: Option<&str>,
+    header_value: Option<&str>,
+    should_pass: bool,
+) -> anyhow::Result<()> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        "Bearer secret123"
-            .parse()
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
-    assert!(validate_bearer(&headers, Some("secret123")).is_ok());
+    if let Some(val) = header_value {
+        headers.insert("authorization", val.parse().anyhow()?);
+    }
+    let result = validate_bearer(&headers, expected_token);
+    if should_pass {
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    } else {
+        assert_eq!(result.err(), Some(ErrorCode::Unauthorized));
+    }
     Ok(())
 }
 
-#[test]
-fn invalid_bearer_rejects() -> anyhow::Result<()> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        "Bearer wrong".parse().map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
-    assert_eq!(
-        validate_bearer(&headers, Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
+#[yare::parameterized(
+    valid_token    = { "token=secret123&mode=all", Some("secret123"), true },
+    invalid_token  = { "token=wrong", Some("secret123"), false },
+    no_token_param = { "mode=all", Some("secret123"), false },
+    no_expected    = { "mode=all", None, true },
+)]
+fn ws_query_validation(
+    query: &str,
+    expected: Option<&str>,
+    should_pass: bool,
+) -> anyhow::Result<()> {
+    let result = validate_ws_query(query, expected);
+    if should_pass {
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    } else {
+        assert_eq!(result.err(), Some(ErrorCode::Unauthorized));
+    }
     Ok(())
 }
 
-#[test]
-fn missing_header_rejects() -> anyhow::Result<()> {
-    let headers = HeaderMap::new();
-    assert_eq!(
-        validate_bearer(&headers, Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
-    Ok(())
-}
-
-#[test]
-fn non_bearer_scheme_rejects() -> anyhow::Result<()> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        "Basic dXNlcjpwYXNz"
-            .parse()
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
-    assert_eq!(
-        validate_bearer(&headers, Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
-    Ok(())
-}
-
-#[test]
-fn ws_query_token_valid() -> anyhow::Result<()> {
-    assert!(validate_ws_query("token=secret123&mode=all", Some("secret123")).is_ok());
-    Ok(())
-}
-
-#[test]
-fn ws_query_token_invalid() -> anyhow::Result<()> {
-    assert_eq!(
-        validate_ws_query("token=wrong", Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
-    Ok(())
-}
-
-#[test]
-fn ws_query_no_token_param() -> anyhow::Result<()> {
-    assert_eq!(
-        validate_ws_query("mode=all", Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
-    Ok(())
-}
-
-#[test]
-fn ws_query_no_expected() -> anyhow::Result<()> {
-    assert!(validate_ws_query("mode=all", None).is_ok());
-    Ok(())
-}
-
-#[test]
-fn ws_auth_valid() -> anyhow::Result<()> {
-    assert!(validate_ws_auth("secret123", Some("secret123")).is_ok());
-    Ok(())
-}
-
-#[test]
-fn ws_auth_invalid() -> anyhow::Result<()> {
-    assert_eq!(
-        validate_ws_auth("wrong", Some("secret123")).err(),
-        Some(ErrorCode::Unauthorized)
-    );
-    Ok(())
-}
-
-#[test]
-fn ws_auth_no_expected() -> anyhow::Result<()> {
-    assert!(validate_ws_auth("anything", None).is_ok());
+#[yare::parameterized(
+    valid       = { "secret123", Some("secret123"), true },
+    invalid     = { "wrong", Some("secret123"), false },
+    no_expected = { "anything", None, true },
+)]
+fn ws_auth_validation(
+    token: &str,
+    expected: Option<&str>,
+    should_pass: bool,
+) -> anyhow::Result<()> {
+    let result = validate_ws_auth(token, expected);
+    if should_pass {
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    } else {
+        assert_eq!(result.err(), Some(ErrorCode::Unauthorized));
+    }
     Ok(())
 }

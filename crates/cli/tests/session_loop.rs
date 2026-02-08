@@ -4,54 +4,21 @@
 //! Integration tests for the session loop + HTTP transport, exercising
 //! the full stack in-process via `axum_test::TestServer`.
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::http::StatusCode;
 use bytes::Bytes;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use coop::driver::AgentState;
 use coop::event::InputEvent;
 use coop::pty::spawn::NativePty;
-use coop::ring::RingBuffer;
-use coop::screen::Screen;
 use coop::session::{Session, SessionConfig};
+use coop::test_support::TestAppStateBuilder;
+use coop::transport::build_router;
 use coop::transport::http::{HealthResponse, InputRequest, ScreenResponse, StatusResponse};
-use coop::transport::state::WriteLock;
-use coop::transport::{build_router, AppState};
-
-fn make_app_state(input_tx: mpsc::Sender<InputEvent>) -> Arc<AppState> {
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-
-    Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(65536))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: None,
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Session loop tests
@@ -60,7 +27,9 @@ fn make_app_state(input_tx: mpsc::Sender<InputEvent>) -> Arc<AppState> {
 #[tokio::test]
 async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "integration".into()], 80, 24)?;
@@ -100,7 +69,9 @@ async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_input_roundtrip() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx.clone());
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx.clone());
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["/bin/cat".into()], 80, 24)?;
@@ -148,7 +119,9 @@ async fn session_input_roundtrip() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 60".into()], 80, 24)?;
@@ -183,7 +156,9 @@ async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_exited_state_broadcast() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["true".into()], 80, 24)?;
@@ -220,10 +195,9 @@ async fn session_exited_state_broadcast() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_health_endpoint() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/health").await;
     resp.assert_status(StatusCode::OK);
@@ -237,10 +211,9 @@ async fn http_health_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_status_endpoint() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/status").await;
     resp.assert_status(StatusCode::OK);
@@ -252,10 +225,9 @@ async fn http_status_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_screen_endpoint() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/screen").await;
     resp.assert_status(StatusCode::OK);
@@ -268,10 +240,9 @@ async fn http_screen_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_screen_text_endpoint() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/screen/text").await;
     resp.assert_status(StatusCode::OK);
@@ -284,9 +255,11 @@ async fn http_screen_text_endpoint() -> anyhow::Result<()> {
 #[tokio::test]
 async fn http_input_endpoint() -> anyhow::Result<()> {
     let (input_tx, mut consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server
         .post("/api/v1/input")
@@ -313,64 +286,39 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server
         .post("/api/v1/agent/nudge")
         .json(&serde_json::json!({"message": "do something"}))
         .await;
 
-    // No nudge encoder configured → NO_DRIVER error
+    // No nudge encoder configured -> NO_DRIVER error
     resp.assert_status(StatusCode::NOT_FOUND);
     Ok(())
 }
 
 #[tokio::test]
 async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-
-    let app_state = Arc::new(AppState {
-        started_at: Instant::now(),
-        agent_type: "unknown".to_owned(),
-        screen: Arc::new(RwLock::new(Screen::new(80, 24))),
-        ring: Arc::new(RwLock::new(RingBuffer::new(65536))),
-        agent_state: Arc::new(RwLock::new(AgentState::Starting)),
-        input_tx,
-        output_tx,
-        state_tx,
-        child_pid: Arc::new(AtomicU32::new(0)),
-        exit_status: Arc::new(RwLock::new(None)),
-        write_lock: Arc::new(WriteLock::new()),
-        ws_client_count: Arc::new(AtomicI32::new(0)),
-        bytes_written: AtomicU64::new(0),
-        auth_token: Some("secret-token".to_owned()),
-        nudge_encoder: None,
-        respond_encoder: None,
-        shutdown: CancellationToken::new(),
-        state_seq: AtomicU64::new(0),
-        detection_tier: std::sync::atomic::AtomicU8::new(u8::MAX),
-        idle_grace_deadline: Arc::new(std::sync::Mutex::new(None)),
-        idle_grace_duration: Duration::from_secs(60),
-        ring_total_written: Arc::new(AtomicU64::new(0)),
-    });
+    let (app_state, _rx) = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .auth_token("secret-token")
+        .build();
 
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     // Health endpoint skips auth
     let resp = server.get("/api/v1/health").await;
     resp.assert_status(StatusCode::OK);
 
-    // No token on protected route → 401
+    // No token on protected route -> 401
     let resp = server.get("/api/v1/status").await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
 
-    // Wrong token → 401
+    // Wrong token -> 401
     let resp = server
         .get("/api/v1/status")
         .add_header(
@@ -380,7 +328,7 @@ async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
         .await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
 
-    // Correct token → 200
+    // Correct token -> 200
     let resp = server
         .get("/api/v1/status")
         .add_header(
@@ -395,13 +343,12 @@ async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_agent_state_endpoint() -> anyhow::Result<()> {
-    let (input_tx, _consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let (app_state, _rx) = TestAppStateBuilder::new().ring_size(65536).build();
     let router = build_router(app_state);
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/agent/state").await;
-    // No driver configured → NO_DRIVER error (404)
+    // No driver configured -> NO_DRIVER error (404)
     resp.assert_status(StatusCode::NOT_FOUND);
     Ok(())
 }
@@ -413,7 +360,9 @@ async fn http_agent_state_endpoint() -> anyhow::Result<()> {
 #[tokio::test]
 async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = make_app_state(input_tx);
+    let app_state = TestAppStateBuilder::new()
+        .ring_size(65536)
+        .build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = NativePty::spawn(&["echo".into(), "fullstack".into()], 80, 24)?;
@@ -434,7 +383,7 @@ async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
 
     // Now query the HTTP layer
     let router = build_router(Arc::clone(&app_state));
-    let server = axum_test::TestServer::new(router).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let server = axum_test::TestServer::new(router)?;
 
     let resp = server.get("/api/v1/screen").await;
     resp.assert_status(StatusCode::OK);
