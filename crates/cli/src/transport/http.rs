@@ -301,7 +301,7 @@ pub async fn input(
 
     let mut data = req.text.into_bytes();
     if req.enter {
-        data.push(b'\n');
+        data.push(b'\r');
     }
     let len = data.len() as i32;
     let _ = s.input_tx.send(InputEvent::Write(Bytes::from(data))).await;

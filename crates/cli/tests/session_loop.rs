@@ -289,7 +289,7 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
     let event = consumer_input_rx.recv().await;
     match event {
         Some(InputEvent::Write(data)) => {
-            assert_eq!(&data[..], b"hello\n");
+            assert_eq!(&data[..], b"hello\r");
         }
         other => {
             anyhow::bail!("expected Write event, got: {other:?}");
