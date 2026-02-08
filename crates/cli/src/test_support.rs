@@ -13,7 +13,9 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::{AgentState, AgentType, ExitStatus, NudgeEncoder, NudgeStep, RespondEncoder};
+use crate::driver::{
+    AgentState, AgentType, Detector, ExitStatus, NudgeEncoder, NudgeStep, RespondEncoder,
+};
 use crate::event::{InputEvent, OutputEvent, StateChangeEvent};
 use crate::pty::Backend;
 use crate::ring::RingBuffer;
@@ -289,4 +291,78 @@ macro_rules! assert_err_contains {
             $substr
         );
     }};
+}
+
+/// A configurable detector for testing [`CompositeDetector`] tier resolution.
+///
+/// Emits a sequence of `(delay, state)` pairs, then waits for shutdown.
+pub struct MockDetector {
+    tier_val: u8,
+    states: Vec<(Duration, AgentState)>,
+}
+
+impl MockDetector {
+    pub fn new(tier: u8, states: Vec<(Duration, AgentState)>) -> Self {
+        Self {
+            tier_val: tier,
+            states,
+        }
+    }
+}
+
+impl Detector for MockDetector {
+    fn run(
+        self: Box<Self>,
+        state_tx: mpsc::Sender<AgentState>,
+        shutdown: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            for (delay, state) in self.states {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(delay) => {
+                        if state_tx.send(state).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            shutdown.cancelled().await;
+        })
+    }
+
+    fn tier(&self) -> u8 {
+        self.tier_val
+    }
+}
+
+/// Spawn an HTTP server on a random port for integration testing.
+///
+/// Returns the bound address and a join handle for the server task.
+pub async fn spawn_http_server(
+    app_state: Arc<AppState>,
+) -> anyhow::Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>)> {
+    let router = crate::transport::build_router(app_state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok((addr, handle))
+}
+
+/// Spawn a gRPC server on a random port for integration testing.
+///
+/// Returns the bound address and a join handle for the server task.
+pub async fn spawn_grpc_server(
+    app_state: Arc<AppState>,
+) -> anyhow::Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let grpc = crate::transport::grpc::CoopGrpc::new(app_state);
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+    let handle = tokio::spawn(async move {
+        let _ = grpc.into_router().serve_with_incoming(incoming).await;
+    });
+    Ok((addr, handle))
 }

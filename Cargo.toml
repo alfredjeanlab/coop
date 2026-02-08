@@ -24,7 +24,7 @@ nix = { version = "0.28", features = ["term", "process", "fs", "signal"] }
 notify = "7"
 prost = "0.14"
 regex = "1"
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
 tonic = "0.14"
 tonic-prost = "0.14"
 futures-util = "0.3"
