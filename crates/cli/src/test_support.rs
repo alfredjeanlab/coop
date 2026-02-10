@@ -28,6 +28,9 @@ use crate::transport::state::{
     TransportChannels,
 };
 
+/// Ring buffer size used by integration tests (64 KiB).
+pub const TEST_RING_SIZE: usize = 65_536;
+
 /// Builder for constructing `AppState` in tests with sensible defaults.
 pub struct AppStateBuilder {
     ring_size: usize,
@@ -116,13 +119,17 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<AppState> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<StateChangeEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptEvent>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(crate::IO_CHANNEL_CAPACITY);
+        let (state_tx, _) =
+            broadcast::channel::<StateChangeEvent>(crate::BROADCAST_CHANNEL_CAPACITY);
+        let (prompt_tx, _) = broadcast::channel::<PromptEvent>(crate::BROADCAST_CHANNEL_CAPACITY);
 
         Arc::new(AppState {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(
+                    crate::DEFAULT_TERM_COLS,
+                    crate::DEFAULT_TERM_ROWS,
+                )),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),

@@ -23,6 +23,7 @@ use crate::driver::{
 use crate::event::{InputEvent, OutputEvent, PromptEvent, StateChangeEvent};
 use crate::pty::{Backend, BackendInput, Boxed};
 use crate::transport::AppState;
+use crate::{BROADCAST_CHANNEL_CAPACITY, IO_CHANNEL_CAPACITY};
 
 /// Runtime objects for building a new [`Session`] (not derivable from [`Config`]).
 pub struct SessionConfig {
@@ -108,8 +109,9 @@ impl Session {
         let _ = backend.resize(config.cols, config.rows);
 
         // Create backend I/O channels
-        let (backend_output_tx, backend_output_rx) = mpsc::channel(256);
-        let (backend_input_tx, backend_input_rx) = mpsc::channel::<BackendInput>(256);
+        let (backend_output_tx, backend_output_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+        let (backend_input_tx, backend_input_rx) =
+            mpsc::channel::<BackendInput>(IO_CHANNEL_CAPACITY);
         let (resize_tx, resize_rx) = mpsc::channel(4);
 
         // Spawn backend task
@@ -118,7 +120,7 @@ impl Session {
         });
 
         // Build and spawn the composite detector (tier resolution + dedup).
-        let (detector_tx, detector_rx) = mpsc::channel(64);
+        let (detector_tx, detector_rx) = mpsc::channel(BROADCAST_CHANNEL_CAPACITY);
         let composite = CompositeDetector { tiers: detectors };
         let detector_shutdown = shutdown.clone();
         tokio::spawn(composite.run(detector_tx, detector_shutdown));
@@ -527,14 +529,17 @@ impl Session {
 /// containing numbered options reaches the screen buffer. Retries up to
 /// `MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
 /// that encode to Enter/Esc.
-async fn enrich_prompt_options(app: Arc<AppState>, expected_seq: u64, parser: OptionParser) {
-    const MAX_ATTEMPTS: u32 = 10;
-    const POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// Maximum retries when polling for prompt options to appear on screen.
+const ENRICH_MAX_ATTEMPTS: u32 = 10;
 
+/// Delay between prompt-option polling attempts.
+const ENRICH_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+async fn enrich_prompt_options(app: Arc<AppState>, expected_seq: u64, parser: OptionParser) {
     let mut last_snap_lines = 0usize;
 
-    for _ in 0..MAX_ATTEMPTS {
-        tokio::time::sleep(POLL_INTERVAL).await;
+    for _ in 0..ENRICH_MAX_ATTEMPTS {
+        tokio::time::sleep(ENRICH_POLL_INTERVAL).await;
 
         // Bail if the state has changed since we spawned.
         let current_seq = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);

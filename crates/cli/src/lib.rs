@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
+// --- Channel capacities ---
+
+/// Buffer size for high-throughput input/output channels (mpsc and broadcast).
+pub const IO_CHANNEL_CAPACITY: usize = 256;
+
+/// Buffer size for lower-throughput event broadcast channels
+/// (state changes, prompts, start/stop events, stdin forwarding).
+pub const BROADCAST_CHANNEL_CAPACITY: usize = 64;
+
+// --- Terminal defaults ---
+
+/// Default terminal width used as a fallback when the real size is unavailable.
+pub const DEFAULT_TERM_COLS: u16 = 80;
+
+/// Default terminal height used as a fallback when the real size is unavailable.
+pub const DEFAULT_TERM_ROWS: u16 = 24;
+
 pub mod attach;
 pub mod config;
 pub mod driver;
