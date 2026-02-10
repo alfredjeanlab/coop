@@ -74,17 +74,16 @@ pub struct ErrorInfo {
 /// Detection tier and cause, stored atomically under a single lock.
 #[derive(Debug, Clone)]
 pub struct DetectionInfo {
-    pub tier: u8,
+    pub tier: Option<u8>,
     pub cause: String,
 }
 
 impl DetectionInfo {
     /// Format the detection tier as a display string.
     pub fn tier_str(&self) -> String {
-        if self.tier == u8::MAX {
-            "none".to_owned()
-        } else {
-            self.tier.to_string()
+        match self.tier {
+            Some(t) => t.to_string(),
+            None => "none".to_owned(),
         }
     }
 }

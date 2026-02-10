@@ -131,7 +131,7 @@ impl AppStateBuilder {
             driver: Arc::new(DriverState {
                 agent_state: RwLock::new(self.agent_state),
                 state_seq: AtomicU64::new(0),
-                detection: RwLock::new(DetectionInfo { tier: u8::MAX, cause: String::new() }),
+                detection: RwLock::new(DetectionInfo { tier: None, cause: String::new() }),
                 error: RwLock::new(None),
                 last_message: Arc::new(RwLock::new(None)),
             }),
