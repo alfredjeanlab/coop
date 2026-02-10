@@ -92,9 +92,6 @@
   20. Raw serde_json::Value for settings/MCP config (config.rs:304,309)
   - No schema validation. Merge logic in merge_settings() silently falls through on unexpected structures.
 
-  21. Inconsistent skip_serializing_if across serde structs
-  - Some use skip_serializing_if = "Option::is_none", some just #[serde(default)], causing different round-trip behavior.
-
   22. Detection tier uses sentinel u8::MAX (state.rs:70)
   - Sentinel value instead of Option<u8>, requiring special-casing in display logic.
 

@@ -70,7 +70,9 @@ pub struct RespondOutcome {
 /// Transport-agnostic question answer (shared across HTTP, WS, gRPC).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportQuestionAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 

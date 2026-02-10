@@ -330,10 +330,10 @@ mod ws_integration {
 
         let parsed: Result<ServerMessage, _> = serde_json::from_str(&response);
         match parsed {
-            Ok(ServerMessage::StateChange { next, .. }) => {
-                assert_eq!(next, "starting", "default AppState starts as 'starting'");
+            Ok(ServerMessage::AgentState { state, .. }) => {
+                assert_eq!(state, "starting", "default AppState starts as 'starting'");
             }
-            other => panic!("expected StateChange, got {other:?}"),
+            other => panic!("expected AgentState, got {other:?}"),
         }
     }
 
