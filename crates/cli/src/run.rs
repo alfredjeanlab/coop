@@ -3,6 +3,18 @@
 
 //! Top-level session runner — shared by `main` and integration tests.
 
+/// Capacity for the input (keypresses / API writes) mpsc channel.
+pub(crate) const INPUT_CHANNEL_CAPACITY: usize = 256;
+
+/// Capacity for the output (PTY bytes) broadcast channel.
+pub(crate) const OUTPUT_CHANNEL_CAPACITY: usize = 256;
+
+/// Capacity for the agent-state-change broadcast channel.
+pub(crate) const STATE_CHANNEL_CAPACITY: usize = 64;
+
+/// Capacity for the prompt-action broadcast channel.
+pub(crate) const PROMPT_CHANNEL_CAPACITY: usize = 64;
+
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
@@ -301,10 +313,10 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
     };
 
     // Create shared channels
-    let (input_tx, consumer_input_rx) = mpsc::channel(256);
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-    let (prompt_tx, _) = broadcast::channel(64);
+    let (input_tx, consumer_input_rx) = mpsc::channel(INPUT_CHANNEL_CAPACITY);
+    let (output_tx, _) = broadcast::channel(OUTPUT_CHANNEL_CAPACITY);
+    let (state_tx, _) = broadcast::channel(STATE_CHANNEL_CAPACITY);
+    let (prompt_tx, _) = broadcast::channel(PROMPT_CHANNEL_CAPACITY);
 
     let resolve_url = format!("{coop_url_for_setup}/api/v1/hooks/stop/resolve");
     let stop_state = Arc::new(StopState::new(stop_config, resolve_url));

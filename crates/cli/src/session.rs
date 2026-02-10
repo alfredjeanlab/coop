@@ -556,21 +556,24 @@ impl Session {
     }
 }
 
+/// Maximum retries when polling the screen for numbered prompt options.
+const ENRICH_PROMPT_MAX_ATTEMPTS: u32 = 10;
+
+/// Delay between screen polls when enriching prompt options.
+const ENRICH_PROMPT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 /// Wait for the screen to render prompt options, parse them, and re-broadcast
 /// the enriched prompt context.
 ///
 /// This runs as a detached task because hook events fire before the PTY output
 /// containing numbered options reaches the screen buffer. Retries up to
-/// `MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
+/// `ENRICH_PROMPT_MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
 /// that encode to Enter/Esc.
 async fn enrich_prompt_options(app: Arc<AppState>, expected_seq: u64, parser: OptionParser) {
-    const MAX_ATTEMPTS: u32 = 10;
-    const POLL_INTERVAL: Duration = Duration::from_millis(200);
-
     let mut last_snap_lines = 0usize;
 
-    for _ in 0..MAX_ATTEMPTS {
-        tokio::time::sleep(POLL_INTERVAL).await;
+    for _ in 0..ENRICH_PROMPT_MAX_ATTEMPTS {
+        tokio::time::sleep(ENRICH_PROMPT_POLL_INTERVAL).await;
 
         // Bail if the state has changed since we spawned.
         let current_seq = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);

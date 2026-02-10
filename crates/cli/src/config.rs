@@ -11,6 +11,9 @@ use crate::driver::AgentType;
 use crate::start::StartConfig;
 use crate::stop::StopConfig;
 
+/// Default ring buffer capacity (1 MiB).
+pub const DEFAULT_RING_SIZE: usize = 1_048_576;
+
 /// Controls how much coop auto-responds to agent prompts during startup.
 ///
 /// - `Auto`: auto-dismiss "disruption" prompts (setup dialogs, workspace trust)
@@ -95,7 +98,7 @@ pub struct Config {
     pub rows: u16,
 
     /// Ring buffer size in bytes.
-    #[arg(long, env = "COOP_RING_SIZE", default_value = "1048576")]
+    #[arg(long, env = "COOP_RING_SIZE", default_value_t = DEFAULT_RING_SIZE)]
     pub ring_size: usize,
 
     /// TERM environment variable for the child process.
