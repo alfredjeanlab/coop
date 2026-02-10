@@ -194,7 +194,6 @@ Session status summary.
   "state": "running",
   "pid": 12345,
   "uptime_secs": 120,
-  "exit_code": null,
   "screen_seq": 42,
   "bytes_read": 8192,
   "bytes_written": 256,
@@ -414,13 +413,9 @@ Current agent state and prompt context.
     "input": "{\"command\":\"ls -la\"}",
     "options": ["Yes", "Yes, and don't ask again for this tool", "No"],
     "options_fallback": false,
-    "questions": [],
     "question_current": 0,
     "ready": true
-  },
-  "error_detail": null,
-  "error_category": null,
-  "last_message": null
+  }
 }
 ```
 
@@ -478,8 +473,7 @@ Send a follow-up message to the agent. Only succeeds when the agent is in
 ```json
 {
   "delivered": true,
-  "state_before": "idle",
-  "reason": null
+  "state_before": "idle"
 }
 ```
 
@@ -512,10 +506,7 @@ Respond to an active prompt. Fields used depend on prompt type.
 
 ```json
 {
-  "accept": true,
-  "option": null,
-  "text": null,
-  "answers": []
+  "accept": true
 }
 ```
 
@@ -548,8 +539,7 @@ the next unanswered question starting from `question_current`. After delivery,
 ```json
 {
   "delivered": true,
-  "prompt_type": "permission",
-  "reason": null
+  "prompt_type": "permission"
 }
 ```
 
@@ -796,14 +786,14 @@ Initiate graceful shutdown of the coop process.
   "subtype": "tool",
   "tool": "Bash",
   "input": "{\"command\":\"ls\"}",
-  "auth_url": null,
   "options": ["Yes", "Yes, and don't ask again for this tool", "No"],
   "options_fallback": false,
-  "questions": [],
   "question_current": 0,
   "ready": true
 }
 ```
+
+All `Option` fields are omitted when null; `Vec` fields are omitted when empty.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -847,10 +837,11 @@ Initiate graceful shutdown of the coop process.
 
 ```json
 {
-  "option": 1,
-  "text": null
+  "option": 1
 }
 ```
+
+All fields are omitted when null.
 
 | Field | Type | Description |
 |-------|------|-------------|

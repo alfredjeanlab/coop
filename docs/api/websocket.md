@@ -117,14 +117,10 @@ to a `state_request`.
     "input": "{\"command\":\"rm -rf /tmp/test\"}",
     "options": ["Yes", "Yes, and don't ask again for this tool", "No"],
     "options_fallback": false,
-    "questions": [],
     "question_current": 0,
     "ready": true
   },
-  "error_detail": null,
-  "error_category": null,
-  "cause": "tier1_hooks",
-  "last_message": null
+  "cause": "tier1_hooks"
 }
 ```
 
@@ -148,8 +144,7 @@ Agent process exited. Sent in `state` and `all` modes. This replaces
 ```json
 {
   "type": "exit",
-  "code": 0,
-  "signal": null
+  "code": 0
 }
 ```
 
@@ -167,8 +162,7 @@ Result of a `nudge` request. Always sent in response to a client `nudge`.
 {
   "type": "nudge_result",
   "delivered": true,
-  "state_before": "idle",
-  "reason": null
+  "state_before": "idle"
 }
 ```
 
@@ -187,8 +181,7 @@ Result of a `respond` request. Always sent in response to a client `respond`.
 {
   "type": "respond_result",
   "delivered": true,
-  "prompt_type": "permission",
-  "reason": null
+  "prompt_type": "permission"
 }
 ```
 
@@ -209,7 +202,6 @@ Session status summary. Sent in response to a `status_request`.
   "state": "running",
   "pid": 12345,
   "uptime_secs": 120,
-  "exit_code": null,
   "screen_seq": 42,
   "bytes_read": 8192,
   "bytes_written": 256,
@@ -238,8 +230,6 @@ hook check occurs.
 {
   "type": "stop",
   "stop_type": "blocked",
-  "signal": null,
-  "error_detail": null,
   "seq": 0
 }
 ```
@@ -521,10 +511,7 @@ agent state.
 ```json
 {
   "type": "respond",
-  "accept": true,
-  "option": null,
-  "text": null,
-  "answers": []
+  "accept": true
 }
 ```
 
@@ -598,14 +585,14 @@ No response on success. The connection will close as the server shuts down.
   "subtype": "tool",
   "tool": "Bash",
   "input": "{\"command\":\"ls\"}",
-  "auth_url": null,
   "options": ["Yes", "Yes, and don't ask again for this tool", "No"],
   "options_fallback": false,
-  "questions": [],
   "question_current": 0,
   "ready": true
 }
 ```
+
+All `Option` fields are omitted when null; `Vec` fields are omitted when empty.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -640,10 +627,11 @@ No response on success. The connection will close as the server shuts down.
 
 ```json
 {
-  "option": 1,
-  "text": null
+  "option": 1
 }
 ```
+
+All fields are omitted when null.
 
 | Field | Type | Description |
 |-------|------|-------------|

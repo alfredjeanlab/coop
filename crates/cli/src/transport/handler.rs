@@ -38,8 +38,10 @@ pub struct HealthInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionStatus {
     pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
     pub uptime_secs: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub screen_seq: u64,
     pub bytes_read: u64,
@@ -70,7 +72,9 @@ pub struct RespondOutcome {
 /// Transport-agnostic question answer (shared across HTTP, WS, gRPC).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportQuestionAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
