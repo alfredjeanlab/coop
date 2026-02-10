@@ -123,7 +123,7 @@ fn defaults_are_correct() {
     assert_eq!(config.host, "0.0.0.0");
     assert_eq!(config.cols, 200);
     assert_eq!(config.rows, 50);
-    assert_eq!(config.ring_size, 1048576);
+    assert_eq!(config.ring_size, crate::ring::DEFAULT_RING_SIZE);
     assert_eq!(config.log_format, "json");
     assert_eq!(config.log_level, "info");
 }

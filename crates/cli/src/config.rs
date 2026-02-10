@@ -8,6 +8,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::driver::AgentType;
+use crate::ring::DEFAULT_RING_SIZE;
 use crate::start::StartConfig;
 use crate::stop::StopConfig;
 
@@ -95,7 +96,7 @@ pub struct Config {
     pub rows: u16,
 
     /// Ring buffer size in bytes.
-    #[arg(long, env = "COOP_RING_SIZE", default_value = "1048576")]
+    #[arg(long, env = "COOP_RING_SIZE", default_value_t = DEFAULT_RING_SIZE)]
     pub ring_size: usize,
 
     /// TERM environment variable for the child process.

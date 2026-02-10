@@ -250,10 +250,13 @@ pub enum HookEvent {
 /// screen lines. Used by the session's prompt enrichment loop.
 pub type OptionParser = Arc<dyn Fn(&[String]) -> Vec<String> + Send + Sync>;
 
+/// Byte threshold below which nudge delay equals the base delay.
+const NUDGE_DELAY_THRESHOLD: usize = 256;
+
 /// Compute a scaled nudge delay based on message length.
 ///
-/// For short messages (≤256 bytes), returns the base delay.
-/// For longer messages, adds `per_byte` for each byte beyond 256,
+/// For short messages (≤[`NUDGE_DELAY_THRESHOLD`] bytes), returns the base delay.
+/// For longer messages, adds `per_byte` for each byte beyond the threshold,
 /// capped at `max`.
 pub fn compute_nudge_delay(
     base: Duration,
@@ -261,7 +264,7 @@ pub fn compute_nudge_delay(
     max: Duration,
     len: usize,
 ) -> Duration {
-    let extra_bytes = len.saturating_sub(256);
+    let extra_bytes = len.saturating_sub(NUDGE_DELAY_THRESHOLD);
     let scaled = base + per_byte * extra_bytes as u32;
     scaled.min(max)
 }

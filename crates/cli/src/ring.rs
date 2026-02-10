@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
+/// Default ring buffer capacity: 1 MiB.
+pub const DEFAULT_RING_SIZE: usize = 1_048_576;
+
 /// Fixed-capacity circular byte buffer for raw PTY output.
 ///
 /// Tracks the total number of bytes ever written so consumers can request
