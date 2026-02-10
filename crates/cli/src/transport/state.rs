@@ -20,6 +20,9 @@ use crate::stop::StopState;
 
 /// Shared application state passed to all handlers via axum `State` extractor.
 ///
+/// Always wrapped in `Arc<AppState>`, so interior fields use interior
+/// mutability (atomics, `RwLock`, channels) directly — no extra `Arc` layer.
+///
 /// Organized into focused sub-structs by concern:
 /// - `terminal`: screen, ring buffer, child process
 /// - `driver`: agent detection state
@@ -27,21 +30,23 @@ use crate::stop::StopState;
 /// - `config`: static session settings
 /// - `lifecycle`: runtime lifecycle primitives
 pub struct AppState {
+    /// Arc-wrapped because detector closures share the terminal atomics
+    /// before `AppState` is constructed (see `run::prepare`).
     pub terminal: Arc<TerminalState>,
-    pub driver: Arc<DriverState>,
+    pub driver: DriverState,
     pub channels: TransportChannels,
     pub config: SessionSettings,
     pub lifecycle: LifecycleState,
 
     /// Whether the agent has transitioned out of `Starting` and is ready.
-    pub ready: Arc<AtomicBool>,
+    pub ready: AtomicBool,
     /// Serializes structured input delivery (nudge, respond) and enforces
     /// a minimum inter-delivery gap to prevent garbled terminal input.
-    pub delivery_gate: Arc<DeliveryGate>,
+    pub delivery_gate: DeliveryGate,
     /// Stop hook gating state. Always present (defaults to mode=allow).
-    pub stop: Arc<StopState>,
+    pub stop: StopState,
     /// Start hook state. Always present (defaults to empty config).
-    pub start: Arc<StartState>,
+    pub start: StartState,
     /// Notified by the session loop whenever any `InputEvent` is processed.
     /// Used by the enter-retry monitor to cancel itself if other input
     /// activity occurs on the PTY (e.g. raw keys, resize, signal, new delivery).

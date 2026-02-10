@@ -309,9 +309,8 @@ impl Session {
                                             encoder.encode_setup(option)
                                         };
                                         let tx = self.app_state.channels.input_tx.clone();
-                                        let gate = Arc::clone(&self.app_state.delivery_gate);
+                                        let app = Arc::clone(&self.app_state);
                                         let expected_seq = state_seq;
-                                        let driver = Arc::clone(&self.app_state.driver);
                                         let prompt_tx = self.app_state.channels.prompt_tx.clone();
                                         let prompt_type = prompt.kind.as_str().to_owned();
                                         let prompt_subtype = prompt.subtype.clone();
@@ -319,13 +318,13 @@ impl Session {
                                         tokio::spawn(async move {
                                             tokio::time::sleep(Duration::from_millis(500)).await;
                                             // Guard: skip if state changed (someone already responded).
-                                            let current = driver.state_seq.load(std::sync::atomic::Ordering::Acquire);
+                                            let current = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);
                                             if current != expected_seq {
                                                 return;
                                             }
-                                            let _delivery = gate.acquire().await;
+                                            let _delivery = app.delivery_gate.acquire().await;
                                             // Re-check after gate acquisition.
-                                            let current = driver.state_seq.load(std::sync::atomic::Ordering::Acquire);
+                                            let current = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);
                                             if current != expected_seq {
                                                 return;
                                             }

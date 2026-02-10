@@ -128,13 +128,13 @@ impl AppStateBuilder {
                 child_pid: AtomicU32::new(self.child_pid),
                 exit_status: RwLock::new(None),
             }),
-            driver: Arc::new(DriverState {
+            driver: DriverState {
                 agent_state: RwLock::new(self.agent_state),
                 state_seq: AtomicU64::new(0),
                 detection: RwLock::new(DetectionInfo { tier: u8::MAX, cause: String::new() }),
                 error: RwLock::new(None),
                 last_message: Arc::new(RwLock::new(None)),
-            }),
+            },
             channels: TransportChannels { input_tx, output_tx, state_tx, prompt_tx },
             config: SessionSettings {
                 started_at: Instant::now(),
@@ -150,13 +150,13 @@ impl AppStateBuilder {
                 ws_client_count: AtomicI32::new(0),
                 bytes_written: AtomicU64::new(0),
             },
-            ready: Arc::new(AtomicBool::new(false)),
-            delivery_gate: Arc::new(crate::transport::state::DeliveryGate::new(Duration::ZERO)),
-            stop: Arc::new(StopState::new(
+            ready: AtomicBool::new(false),
+            delivery_gate: crate::transport::state::DeliveryGate::new(Duration::ZERO),
+            stop: StopState::new(
                 self.stop_config.unwrap_or_default(),
                 "http://127.0.0.1:0/api/v1/hooks/stop/resolve".to_owned(),
-            )),
-            start: Arc::new(StartState::new(self.start_config.unwrap_or_default())),
+            ),
+            start: StartState::new(self.start_config.unwrap_or_default()),
             input_activity: Arc::new(tokio::sync::Notify::new()),
         })
     }

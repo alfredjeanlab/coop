@@ -307,18 +307,18 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
     let (prompt_tx, _) = broadcast::channel(64);
 
     let resolve_url = format!("{coop_url_for_setup}/api/v1/hooks/stop/resolve");
-    let stop_state = Arc::new(StopState::new(stop_config, resolve_url));
-    let start_state = Arc::new(StartState::new(start_config));
+    let stop_state = StopState::new(stop_config, resolve_url);
+    let start_state = StartState::new(start_config);
 
     let app_state = Arc::new(AppState {
         terminal,
-        driver: Arc::new(DriverState {
+        driver: DriverState {
             agent_state: RwLock::new(AgentState::Starting),
             state_seq: AtomicU64::new(0),
             detection: RwLock::new(DetectionInfo { tier: u8::MAX, cause: String::new() }),
             error: RwLock::new(None),
             last_message,
-        }),
+        },
         channels: TransportChannels { input_tx, output_tx, state_tx, prompt_tx },
         config: SessionSettings {
             started_at: Instant::now(),
@@ -334,8 +334,8 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
             ws_client_count: AtomicI32::new(0),
             bytes_written: AtomicU64::new(0),
         },
-        ready: Arc::new(AtomicBool::new(false)),
-        delivery_gate: Arc::new(crate::transport::state::DeliveryGate::new(config.input_delay())),
+        ready: AtomicBool::new(false),
+        delivery_gate: crate::transport::state::DeliveryGate::new(config.input_delay()),
         stop: stop_state,
         start: start_state,
         input_activity: Arc::new(tokio::sync::Notify::new()),
