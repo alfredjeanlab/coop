@@ -95,7 +95,7 @@ pub struct Config {
     pub rows: u16,
 
     /// Ring buffer size in bytes.
-    #[arg(long, env = "COOP_RING_SIZE", default_value = "1048576")]
+    #[arg(long, env = "COOP_RING_SIZE", default_value_t = crate::ring::DEFAULT_RING_SIZE)]
     pub ring_size: usize,
 
     /// TERM environment variable for the child process.
@@ -246,8 +246,8 @@ impl Config {
             agent: "unknown".into(),
             agent_config: None,
             attach: None,
-            cols: 80,
-            rows: 24,
+            cols: crate::screen::FALLBACK_COLS,
+            rows: crate::screen::FALLBACK_ROWS,
             ring_size: 4096,
             term: "xterm-256color".into(),
             port_health: None,

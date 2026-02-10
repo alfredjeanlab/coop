@@ -3,6 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default fallback terminal width (columns).
+pub const FALLBACK_COLS: u16 = 80;
+/// Default fallback terminal height (rows).
+pub const FALLBACK_ROWS: u16 = 24;
+
 /// Opaque terminal screen backed by an avt virtual terminal.
 pub struct Screen {
     vt: avt::Vt,
