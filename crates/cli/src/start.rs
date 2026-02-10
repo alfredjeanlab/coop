@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
+use crate::EVENT_CHANNEL_CAPACITY;
+
 /// Top-level start hook configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StartConfig {
@@ -67,7 +69,7 @@ pub struct StartState {
 impl StartState {
     /// Create a new `StartState` with the given initial config.
     pub fn new(config: StartConfig) -> Self {
-        let (start_tx, _) = broadcast::channel(64);
+        let (start_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             config: RwLock::new(config),
             start_tx,

@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::{AgentState, Detector, PromptKind};
+use crate::EVENT_CHANNEL_CAPACITY;
 
 /// A state emission from the composite detector, including the tier that
 /// produced it.
@@ -40,7 +41,8 @@ impl CompositeDetector {
         shutdown: CancellationToken,
     ) {
         // Internal channel where each detector sends (tier, state, cause).
-        let (tag_tx, mut tag_rx) = mpsc::channel::<(u8, AgentState, String)>(64);
+        let (tag_tx, mut tag_rx) =
+            mpsc::channel::<(u8, AgentState, String)>(EVENT_CHANNEL_CAPACITY);
 
         // Spawn each detector with a forwarding task that tags with tier.
         for detector in self.tiers.drain(..) {

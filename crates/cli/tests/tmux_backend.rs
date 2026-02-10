@@ -30,10 +30,12 @@ impl TmuxSession {
         let tmpdir = tempfile::tempdir()?;
         let socket = tmpdir.path().join("tmux.sock");
 
+        let cols_str = coop::DEFAULT_TERM_COLS.to_string();
+        let rows_str = coop::DEFAULT_TERM_ROWS.to_string();
         let status = Command::new("tmux")
             .args(["-S"])
             .arg(&socket)
-            .args(["new-session", "-d", "-s", name, "-x", "80", "-y", "24"])
+            .args(["new-session", "-d", "-s", name, "-x", &cols_str, "-y", &rows_str])
             .status()?;
         anyhow::ensure!(status.success(), "failed to create tmux session");
 

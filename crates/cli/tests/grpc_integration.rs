@@ -165,7 +165,7 @@ async fn grpc_send_signal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn grpc_stream_output() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(coop::TEST_RING_SIZE).build();
     let (mut client, state) = grpc_client(app_state).await?;
 
     let mut stream =
