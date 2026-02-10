@@ -33,7 +33,16 @@ impl TmuxSession {
         let status = Command::new("tmux")
             .args(["-S"])
             .arg(&socket)
-            .args(["new-session", "-d", "-s", name, "-x", "80", "-y", "24"])
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                name,
+                "-x",
+                &coop::screen::DEFAULT_COLS.to_string(),
+                "-y",
+                &coop::screen::DEFAULT_ROWS.to_string(),
+            ])
             .status()?;
         anyhow::ensure!(status.success(), "failed to create tmux session");
 
