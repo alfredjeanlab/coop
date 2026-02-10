@@ -61,7 +61,7 @@ impl CompositeDetector {
         drop(tag_tx); // only forwarding tasks hold senders
 
         let mut current_state = AgentState::Starting;
-        let mut current_tier: u8 = u8::MAX;
+        let mut current_tier: Option<u8> = None;
 
         loop {
             tokio::select! {
@@ -73,38 +73,38 @@ impl CompositeDetector {
                     // Terminal states always accepted immediately.
                     if matches!(new_state, AgentState::Exited { .. }) {
                         current_state = new_state.clone();
-                        current_tier = tier;
+                        current_tier = Some(tier);
                         let _ = output_tx.send(DetectedState { state: new_state, tier, cause }).await;
                         continue;
                     }
 
                     // Dedup: same state from any tier → update tier tracking only.
                     if new_state == current_state {
-                        if tier < current_tier {
-                            current_tier = tier;
+                        if current_tier.is_none_or(|ct| tier < ct) {
+                            current_tier = Some(tier);
                         }
                         continue;
                     }
 
                     // State changed.
-                    if tier <= current_tier {
+                    if current_tier.is_none_or(|ct| tier <= ct) {
                         // Same or higher confidence → accept immediately,
                         // UNLESS a generic Permission prompt would overwrite
                         // a more specific Plan or Question prompt from the
                         // same tier (Claude fires both notification and
                         // pre_tool_use hooks for the same prompt moment).
-                        if tier == current_tier
+                        if current_tier == Some(tier)
                             && prompt_supersedes(&current_state, &new_state)
                         {
                             continue;
                         }
                         current_state = new_state.clone();
-                        current_tier = tier;
+                        current_tier = Some(tier);
                         let _ = output_tx.send(DetectedState { state: new_state, tier, cause }).await;
                     } else if new_state.state_priority() > current_state.state_priority() {
                         // Lower confidence tier escalating state → accept.
                         current_state = new_state.clone();
-                        current_tier = tier;
+                        current_tier = Some(tier);
                         let _ = output_tx.send(DetectedState { state: new_state, tier, cause }).await;
                     } else {
                         // Lower confidence tier attempting to downgrade or

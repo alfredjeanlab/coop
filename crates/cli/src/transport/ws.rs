@@ -23,8 +23,8 @@ use crate::event::{OutputEvent, StateChangeEvent};
 use crate::screen::{CursorPosition, ScreenSnapshot};
 use crate::start::StartConfig;
 use crate::start::StartEvent;
-use crate::stop::StopEvent;
 use crate::stop::StopConfig;
+use crate::stop::StopEvent;
 use crate::transport::auth;
 use crate::transport::handler::{
     compute_health, compute_status, error_message, extract_error_fields, handle_input,
