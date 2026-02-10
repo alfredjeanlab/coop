@@ -27,6 +27,7 @@ use crate::transport::state::AppState;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
     pub uptime_secs: i64,
     pub agent: String,
@@ -63,6 +64,7 @@ pub struct ScreenResponse {
     pub cols: u16,
     pub rows: u16,
     pub alt_screen: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<CursorPosition>,
     pub seq: u64,
 }
@@ -71,6 +73,7 @@ pub struct ScreenResponse {
 pub struct OutputQuery {
     #[serde(default)]
     pub offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
 }
 
@@ -133,12 +136,13 @@ pub struct AgentStateResponse {
     pub since_seq: u64,
     pub screen_seq: u64,
     pub detection_tier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<PromptContext>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
 }
 
@@ -149,10 +153,13 @@ pub struct NudgeRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RespondRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<TransportQuestionAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option: Option<i32>,
 }
 
@@ -360,7 +367,7 @@ pub struct StopHookInput {
     // NOTE(compat): Maintain consistent structure for all hook payloads
     #[allow(dead_code)]
     pub event: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<StopHookData>,
 }
 
@@ -378,11 +385,11 @@ pub struct StopHookData {
 /// `{"decision":"block","reason":"..."}` means "block".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopHookVerdict {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
 }
 
@@ -416,10 +423,8 @@ pub async fn hooks_stop(
     {
         let error = s.driver.error.read().await;
         if let Some(ref info) = *error {
-            let is_unrecoverable = matches!(
-                info.category,
-                ErrorCategory::Unauthorized | ErrorCategory::OutOfCredits
-            );
+            let is_unrecoverable =
+                matches!(info.category, ErrorCategory::Unauthorized | ErrorCategory::OutOfCredits);
             if is_unrecoverable {
                 let detail = Some(info.detail.clone());
                 drop(error);
@@ -489,7 +494,7 @@ pub struct StartHookInput {
     // NOTE(compat): Maintain consistent structure for all hook payloads
     #[allow(dead_code)]
     pub event: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
 }
 

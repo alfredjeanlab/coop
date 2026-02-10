@@ -93,19 +93,21 @@ pub struct PromptContext {
     /// - **plan**, **question**: (none currently)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
     /// OAuth authorization URL (present during setup oauth_login prompts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_url: Option<String>,
     /// Numbered option labels parsed from the terminal screen (permission/plan prompts).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
     /// True when `options` contains fallback labels (parser couldn't find real options).
     #[serde(default)]
     pub options_fallback: bool,
     /// All questions in a multi-question dialog.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<QuestionContext>,
     /// 0-indexed active question; == questions.len() means confirm phase.
     #[serde(default)]
@@ -127,14 +129,18 @@ pub struct QuestionContext {
 /// An answer to a single question within a dialog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QuestionAnswer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
 /// Exit status of the child process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExitStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
 }
 
@@ -180,9 +186,17 @@ pub enum HookEvent {
     SessionEnd,
     TurnStart,
     TurnEnd,
-    ToolAfter { tool: String },
-    ToolBefore { tool: String, tool_input: Option<serde_json::Value> },
-    Notification { notification_type: String },
+    ToolAfter {
+        tool: String,
+    },
+    ToolBefore {
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_input: Option<serde_json::Value>,
+    },
+    Notification {
+        notification_type: String,
+    },
 }
 
 /// Driver-provided function that parses numbered option labels from rendered

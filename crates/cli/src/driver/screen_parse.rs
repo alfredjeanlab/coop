@@ -19,6 +19,7 @@ use super::{AgentState, Detector};
 /// User-provided JSON configuration for screen pattern matching.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScreenPatternConfig {
+    #[serde(default)]
     pub prompt_pattern: Option<String>,
     #[serde(default)]
     pub working_patterns: Vec<String>,

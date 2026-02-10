@@ -44,6 +44,7 @@ pub enum ServerMessage {
         cols: u16,
         rows: u16,
         alt_screen: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<CursorPosition>,
         seq: u64,
     },
@@ -52,17 +53,19 @@ pub enum ServerMessage {
         next: String,
         seq: u64,
         prompt: Box<Option<PromptContext>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_detail: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_category: Option<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         cause: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_message: Option<String>,
     },
     Exit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         signal: Option<i32>,
     },
     Error {
@@ -71,22 +74,24 @@ pub enum ServerMessage {
     },
     NudgeResult {
         delivered: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         state_before: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     RespondResult {
         delivered: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     Status {
         state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<i32>,
         uptime_secs: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
         screen_seq: u64,
         bytes_read: u64,
@@ -95,15 +100,15 @@ pub enum ServerMessage {
     },
     Stop {
         stop_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         signal: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_detail: Option<String>,
         seq: u64,
     },
     Start {
         source: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         injected: bool,
         seq: u64,
@@ -111,9 +116,9 @@ pub enum ServerMessage {
     PromptAction {
         source: String,
         prompt_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         subtype: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         option: Option<u32>,
     },
     Pong {},
@@ -144,10 +149,13 @@ pub enum ClientMessage {
         message: String,
     },
     Respond {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         accept: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         answers: Vec<TransportQuestionAnswer>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         option: Option<i32>,
     },
     Replay {
@@ -179,6 +187,7 @@ pub enum SubscriptionMode {
 pub struct WsQuery {
     #[serde(default)]
     pub mode: SubscriptionMode,
+    #[serde(default)]
     pub token: Option<String>,
 }
 
@@ -472,9 +481,7 @@ async fn handle_client_message(
             require_auth!(authed);
             let decoded = match base64::engine::general_purpose::STANDARD.decode(&data) {
                 Ok(d) => d,
-                Err(_) => {
-                    return Some(ws_error(ErrorCode::BadRequest, "invalid base64 data"))
-                }
+                Err(_) => return Some(ws_error(ErrorCode::BadRequest, "invalid base64 data")),
             };
             let _ = handle_input_raw(state, decoded).await;
             None
