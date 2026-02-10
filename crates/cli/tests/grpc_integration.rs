@@ -264,7 +264,7 @@ async fn grpc_nudge_not_ready() -> anyhow::Result<()> {
 #[tokio::test]
 async fn grpc_nudge_no_driver() -> anyhow::Result<()> {
     let (app_state, _rx) = AppStateBuilder::new().build();
-    app_state.ready.store(true, Ordering::Release);
+    app_state.driver.ready.store(true, Ordering::Release);
     let (mut client, _state) = grpc_client(app_state).await?;
 
     let result = client.nudge(proto::NudgeRequest { message: "hello".to_owned() }).await;
@@ -280,7 +280,7 @@ async fn grpc_nudge_agent_busy() -> anyhow::Result<()> {
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .agent_state(AgentState::Working)
         .build();
-    app_state.ready.store(true, Ordering::Release);
+    app_state.driver.ready.store(true, Ordering::Release);
     let (mut client, _state) = grpc_client(app_state).await?;
 
     let resp =

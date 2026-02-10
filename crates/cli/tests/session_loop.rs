@@ -252,7 +252,7 @@ async fn http_nudge_returns_not_ready_before_startup() -> anyhow::Result<()> {
 async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
     let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
     // Mark ready so the not-ready gate is passed
-    app_state.ready.store(true, std::sync::atomic::Ordering::Release);
+    app_state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 

@@ -218,7 +218,6 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
         ring: RwLock::new(RingBuffer::new(config.ring_size)),
         ring_total_written: Arc::new(AtomicU64::new(0)),
         child_pid: AtomicU32::new(0),
-        exit_status: RwLock::new(None),
     });
 
     // 5. Build driver (detectors + encoders). For Claude, uses real paths
@@ -319,6 +318,7 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
             detection_cause: RwLock::new(String::new()),
             error: RwLock::new(None),
             last_message,
+            ready: AtomicBool::new(false),
         }),
         channels: TransportChannels { input_tx, output_tx, state_tx, prompt_tx },
         config: SessionSettings {
@@ -335,7 +335,6 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
             ws_client_count: AtomicI32::new(0),
             bytes_written: AtomicU64::new(0),
         },
-        ready: Arc::new(AtomicBool::new(false)),
         delivery_gate: Arc::new(crate::transport::state::DeliveryGate::new(config.input_delay())),
         stop: stop_state,
         start: start_state,

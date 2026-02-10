@@ -123,7 +123,7 @@ pub async fn compute_health(state: &AppState) -> HealthInfo {
     let snap = state.terminal.screen.read().await.snapshot();
     let pid = state.terminal.child_pid.load(Ordering::Relaxed);
     let uptime = state.config.started_at.elapsed().as_secs() as i64;
-    let ready = state.ready.load(Ordering::Acquire);
+    let ready = state.driver.ready.load(Ordering::Acquire);
 
     HealthInfo {
         status: "running".to_owned(),
@@ -143,14 +143,18 @@ pub async fn compute_status(state: &AppState) -> SessionStatus {
     let ring = state.terminal.ring.read().await;
     let screen = state.terminal.screen.read().await;
     let pid = state.terminal.child_pid.load(Ordering::Relaxed);
-    let exit = state.terminal.exit_status.read().await;
     let bw = state.lifecycle.bytes_written.load(Ordering::Relaxed);
+
+    let exit_code = match &*agent {
+        AgentState::Exited { status } => status.code,
+        _ => None,
+    };
 
     SessionStatus {
         state: session_state_str(&agent, pid).to_owned(),
         pid: if pid == 0 { None } else { Some(pid as i32) },
         uptime_secs: state.config.started_at.elapsed().as_secs() as i64,
-        exit_code: exit.as_ref().and_then(|e| e.code),
+        exit_code,
         screen_seq: screen.seq(),
         bytes_read: ring.total_written(),
         bytes_written: bw,
@@ -163,7 +167,7 @@ pub async fn compute_status(state: &AppState) -> SessionStatus {
 /// Returns `Err` only for genuine errors (not ready, no driver).
 /// Agent-busy is a soft failure returned as `Ok(NudgeOutcome { delivered: false })`.
 pub async fn handle_nudge(state: &AppState, message: &str) -> Result<NudgeOutcome, ErrorCode> {
-    if !state.ready.load(Ordering::Acquire) {
+    if !state.driver.ready.load(Ordering::Acquire) {
         return Err(ErrorCode::NotReady);
     }
 
@@ -223,7 +227,7 @@ pub async fn handle_respond(
     text: Option<&str>,
     answers: &[TransportQuestionAnswer],
 ) -> Result<RespondOutcome, ErrorCode> {
-    if !state.ready.load(Ordering::Acquire) {
+    if !state.driver.ready.load(Ordering::Acquire) {
         return Err(ErrorCode::NotReady);
     }
 

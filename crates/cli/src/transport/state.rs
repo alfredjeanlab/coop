@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::GroomLevel;
 use crate::driver::{
-    AgentState, AgentType, ErrorCategory, ExitStatus, NudgeEncoder, RespondEncoder,
+    classify_error_detail, AgentState, AgentType, DetectedState, ErrorCategory, ExitStatus,
+    NudgeEncoder, RespondEncoder,
 };
 use crate::event::{InputEvent, OutputEvent, PromptEvent, StateChangeEvent};
 use crate::ring::RingBuffer;
@@ -22,7 +23,7 @@ use crate::stop::StopState;
 ///
 /// Organized into focused sub-structs by concern:
 /// - `terminal`: screen, ring buffer, child process
-/// - `driver`: agent detection state
+/// - `driver`: agent detection state machine (with explicit transition methods)
 /// - `channels`: channel endpoints for session ↔ transport communication
 /// - `config`: static session settings
 /// - `lifecycle`: runtime lifecycle primitives
@@ -33,8 +34,6 @@ pub struct AppState {
     pub config: SessionSettings,
     pub lifecycle: LifecycleState,
 
-    /// Whether the agent has transitioned out of `Starting` and is ready.
-    pub ready: Arc<AtomicBool>,
     /// Serializes structured input delivery (nudge, respond) and enforces
     /// a minimum inter-delivery gap to prevent garbled terminal input.
     pub delivery_gate: Arc<DeliveryGate>,
@@ -59,9 +58,6 @@ pub struct TerminalState {
     /// to the entire `TerminalState`.
     pub ring_total_written: Arc<AtomicU64>,
     pub child_pid: AtomicU32,
-    /// ORDERING: must be written before `DriverState.agent_state` is set to
-    /// `Exited` so readers who see the exited state always find this populated.
-    pub exit_status: RwLock<Option<ExitStatus>>,
 }
 
 /// Classified error detail and category, stored atomically under a single lock.
@@ -71,7 +67,11 @@ pub struct ErrorInfo {
     pub category: ErrorCategory,
 }
 
-/// Driver detection state.
+/// Agent detection state machine.
+///
+/// Owns all fields that participate in agent state transitions so that
+/// transition methods can update them atomically without cross-struct
+/// ordering concerns.
 pub struct DriverState {
     pub agent_state: RwLock<AgentState>,
     pub state_seq: AtomicU64,
@@ -85,16 +85,77 @@ pub struct DriverState {
     /// Last assistant message text (concatenated text blocks from the most recent
     /// assistant JSONL entry). Written directly by log/stdout detectors.
     pub last_message: Arc<RwLock<Option<String>>>,
+    /// Whether the agent has transitioned out of `Starting` and is ready.
+    pub ready: AtomicBool,
 }
 
 impl DriverState {
     /// Format the current detection tier as a display string.
     pub fn detection_tier_str(&self) -> String {
-        let tier = self.detection_tier.load(std::sync::atomic::Ordering::Acquire);
+        let tier = self.detection_tier.load(Ordering::Acquire);
         if tier == u8::MAX {
             "none".to_owned()
         } else {
             tier.to_string()
+        }
+    }
+
+    /// Apply a detected state change, updating all driver fields.
+    ///
+    /// Returns a [`StateChangeEvent`] ready for broadcast.
+    pub async fn apply_detected(&self, detected: DetectedState) -> StateChangeEvent {
+        let seq = self.state_seq.fetch_add(1, Ordering::AcqRel) + 1;
+
+        let mut current = self.agent_state.write().await;
+        let prev = current.clone();
+        *current = detected.state.clone();
+        drop(current);
+
+        // Mark ready on first transition away from Starting.
+        if matches!(prev, AgentState::Starting) && !matches!(detected.state, AgentState::Starting) {
+            self.ready.store(true, Ordering::Release);
+        }
+
+        // Store error detail + category when entering Error state.
+        if let AgentState::Error { ref detail } = detected.state {
+            let category = classify_error_detail(detail);
+            *self.error.write().await = Some(ErrorInfo { detail: detail.clone(), category });
+        } else {
+            *self.error.write().await = None;
+        }
+
+        // Store detection metadata.
+        self.detection_tier.store(detected.tier, Ordering::Release);
+        *self.detection_cause.write().await = detected.cause.clone();
+
+        let last_message = self.last_message.read().await.clone();
+
+        StateChangeEvent { prev, next: detected.state, seq, cause: detected.cause, last_message }
+    }
+
+    /// Apply an exit transition.
+    ///
+    /// Sets `agent_state` to [`AgentState::Exited`] and bumps the sequence
+    /// counter.  The exit status is carried inside the `Exited` variant, so
+    /// no separate field (or cross-struct ordering) is required.
+    ///
+    /// Returns a [`StateChangeEvent`] ready for broadcast.
+    pub async fn apply_exited(&self, status: ExitStatus) -> StateChangeEvent {
+        let seq = self.state_seq.fetch_add(1, Ordering::AcqRel) + 1;
+
+        let mut current = self.agent_state.write().await;
+        let prev = current.clone();
+        *current = AgentState::Exited { status };
+        drop(current);
+
+        let last_message = self.last_message.read().await.clone();
+
+        StateChangeEvent {
+            prev,
+            next: AgentState::Exited { status },
+            seq,
+            cause: String::new(),
+            last_message,
         }
     }
 }

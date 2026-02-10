@@ -125,7 +125,6 @@ impl AppStateBuilder {
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
-                exit_status: RwLock::new(None),
             }),
             driver: Arc::new(DriverState {
                 agent_state: RwLock::new(self.agent_state),
@@ -134,6 +133,7 @@ impl AppStateBuilder {
                 detection_cause: RwLock::new(String::new()),
                 error: RwLock::new(None),
                 last_message: Arc::new(RwLock::new(None)),
+                ready: AtomicBool::new(false),
             }),
             channels: TransportChannels { input_tx, output_tx, state_tx, prompt_tx },
             config: SessionSettings {
@@ -150,7 +150,6 @@ impl AppStateBuilder {
                 ws_client_count: AtomicI32::new(0),
                 bytes_written: AtomicU64::new(0),
             },
-            ready: Arc::new(AtomicBool::new(false)),
             delivery_gate: Arc::new(crate::transport::state::DeliveryGate::new(Duration::ZERO)),
             stop: Arc::new(StopState::new(
                 self.stop_config.unwrap_or_default(),

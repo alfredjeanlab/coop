@@ -17,8 +17,8 @@ use tracing::{debug, warn};
 
 use crate::config::{Config, GroomLevel};
 use crate::driver::{
-    classify_error_detail, disruption_option, AgentState, CompositeDetector, DetectedState,
-    Detector, ExitStatus, NudgeStep, OptionParser, PromptKind,
+    disruption_option, AgentState, CompositeDetector, DetectedState, Detector, ExitStatus,
+    NudgeStep, OptionParser, PromptKind,
 };
 use crate::event::{InputEvent, OutputEvent, PromptEvent, StateChangeEvent};
 use crate::pty::{Backend, BackendInput, Boxed};
@@ -142,7 +142,6 @@ impl Session {
         let shutdown_timeout = config.shutdown_timeout();
         let graceful_timeout = config.drain_timeout();
         let mut screen_debounce = tokio::time::interval(config.screen_debounce());
-        let mut state_seq: u64 = 0;
         let mut idle_since: Option<tokio::time::Instant> = None;
         let mut last_state = AgentState::Starting;
         let mut drain_deadline: Option<tokio::time::Instant> = None;
@@ -229,58 +228,20 @@ impl Session {
                 //    CompositeDetector already applies tier resolution + dedup.
                 detected = self.detector_rx.recv() => {
                     if let Some(detected) = detected {
-                        state_seq += 1;
-                        let mut current = self.app_state.driver.agent_state.write().await;
-                        let prev = current.clone();
-                        *current = detected.state.clone();
-                        drop(current);
-                        last_state = detected.state.clone();
-
-                        // Mark ready on first transition away from Starting.
-                        if matches!(prev, AgentState::Starting)
-                            && !matches!(detected.state, AgentState::Starting)
-                        {
-                            self.app_state
-                                .ready
-                                .store(true, std::sync::atomic::Ordering::Release);
-                        }
-
-                        // Store error detail + category when entering Error state.
-                        if let AgentState::Error { ref detail } = detected.state {
-                            let category = classify_error_detail(detail);
-                            *self.app_state.driver.error.write().await = Some(
-                                crate::transport::state::ErrorInfo {
-                                    detail: detail.clone(),
-                                    category,
-                                },
-                            );
-                        } else {
-                            *self.app_state.driver.error.write().await = None;
-                        }
-
-                        // Store metadata for the HTTP/gRPC API.
-                        self.app_state.driver.state_seq.store(state_seq, std::sync::atomic::Ordering::Release);
-                        self.app_state.driver.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Release);
-                        *self.app_state.driver.detection_cause.write().await = detected.cause.clone();
-
-                        let last_message = self.app_state.driver.last_message.read().await.clone();
-                        let _ = self.app_state.channels.state_tx.send(StateChangeEvent {
-                            prev,
-                            next: detected.state.clone(),
-                            seq: state_seq,
-                            cause: detected.cause,
-                            last_message,
-                        });
+                        let state = detected.state.clone();
+                        let event = self.app_state.driver.apply_detected(detected).await;
+                        let _ = self.app_state.channels.state_tx.send(event.clone());
+                        last_state = state.clone();
 
                         // Spawn deferred option enrichment for Permission/Plan prompts.
                         // Hook events fire before the screen renders numbered options,
                         // so we wait briefly for the PTY output to catch up, then parse
                         // options from the screen and re-broadcast the enriched state.
-                        if let AgentState::Prompt { ref prompt } = detected.state {
+                        if let AgentState::Prompt { ref prompt } = state {
                             if matches!(prompt.kind, PromptKind::Permission | PromptKind::Plan) {
                                 if let Some(ref parser) = self.option_parser {
                                     let app = Arc::clone(&self.app_state);
-                                    let seq = state_seq;
+                                    let seq = event.seq;
                                     let parser = Arc::clone(parser);
                                     tokio::spawn(enrich_prompt_options(app, seq, parser));
                                 }
@@ -290,7 +251,7 @@ impl Session {
                         // Auto-dismiss disruption prompts in groom=auto mode.
                         // The prompt state is broadcast BEFORE auto-dismiss so API
                         // clients see the action transparently.
-                        if let AgentState::Prompt { ref prompt } = detected.state {
+                        if let AgentState::Prompt { ref prompt } = state {
                             if self.app_state.config.groom == GroomLevel::Auto {
                                 if let Some(option) = disruption_option(prompt) {
                                     if prompt.subtype.as_deref() == Some("settings_error") {
@@ -308,7 +269,7 @@ impl Session {
                                         };
                                         let tx = self.app_state.channels.input_tx.clone();
                                         let gate = Arc::clone(&self.app_state.delivery_gate);
-                                        let expected_seq = state_seq;
+                                        let expected_seq = event.seq;
                                         let driver = Arc::clone(&self.app_state.driver);
                                         let prompt_tx = self.app_state.channels.prompt_tx.clone();
                                         let prompt_type = prompt.kind.as_str().to_owned();
@@ -341,7 +302,7 @@ impl Session {
                         }
 
                         // Track idle time for idle_timeout.
-                        if matches!(detected.state, AgentState::Idle)
+                        if matches!(state, AgentState::Idle)
                             && idle_timeout > Duration::ZERO
                         {
                             if idle_since.is_none() {
@@ -352,7 +313,7 @@ impl Session {
                         }
 
                         // Drain check: agent reached idle during drain → kill now.
-                        if drain_deadline.is_some() && matches!(detected.state, AgentState::Idle) {
+                        if drain_deadline.is_some() && matches!(state, AgentState::Idle) {
                             debug!("drain: agent reached idle, sending SIGHUP");
                             let pid = self.app_state.terminal.child_pid.load(std::sync::atomic::Ordering::Acquire);
                             if pid != 0 {
@@ -487,27 +448,9 @@ impl Session {
             }
         };
 
-        // Store exit status and broadcast exited state.
-        // ORDERING: exit_status must be written before agent_state so that
-        // any reader who observes AgentState::Exited is guaranteed to find
-        // exit_status populated.
-        {
-            let mut exit = self.app_state.terminal.exit_status.write().await;
-            *exit = Some(status);
-        }
-        let mut current = self.app_state.driver.agent_state.write().await;
-        let prev = current.clone();
-        *current = AgentState::Exited { status };
-        drop(current);
-        state_seq += 1;
-        let last_message = self.app_state.driver.last_message.read().await.clone();
-        let _ = self.app_state.channels.state_tx.send(StateChangeEvent {
-            prev,
-            next: AgentState::Exited { status },
-            seq: state_seq,
-            cause: String::new(),
-            last_message,
-        });
+        // Transition to exited state and broadcast.
+        let event = self.app_state.driver.apply_exited(status).await;
+        let _ = self.app_state.channels.state_tx.send(event);
 
         Ok(status)
     }
