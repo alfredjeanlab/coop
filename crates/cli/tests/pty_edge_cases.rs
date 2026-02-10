@@ -13,7 +13,8 @@ use coop::config::Config;
 use coop::pty::spawn::NativePty;
 use coop::pty::{Backend, BackendInput};
 use coop::session::{Session, SessionConfig};
-use coop::test_support::AppStateBuilder;
+use coop::test_support::{AppStateBuilder, TEST_RING_SIZE};
+use coop::{DEFAULT_RING_SIZE, FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS};
 
 #[tokio::test]
 async fn child_exit_produces_eof() -> anyhow::Result<()> {
@@ -21,7 +22,7 @@ async fn child_exit_produces_eof() -> anyhow::Result<()> {
     let (_input_tx, input_rx) = mpsc::channel::<BackendInput>(64);
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty = NativePty::spawn(&["true".into()], 80, 24, &[])?;
+    let mut pty = NativePty::spawn(&["true".into()], FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS, &[])?;
     let status = pty.run(output_tx, input_rx, resize_rx).await?;
     assert_eq!(status.code, Some(0));
     assert_eq!(status.signal, None);
@@ -40,7 +41,12 @@ async fn child_killed_produces_signal() -> anyhow::Result<()> {
     let (_input_tx, input_rx) = mpsc::channel::<BackendInput>(64);
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty = NativePty::spawn(&["/bin/sleep".into(), "60".into()], 80, 24, &[])?;
+    let mut pty = NativePty::spawn(
+        &["/bin/sleep".into(), "60".into()],
+        FALLBACK_TERM_COLS,
+        FALLBACK_TERM_ROWS,
+        &[],
+    )?;
     let pid = pty.child_pid().ok_or_else(|| anyhow::anyhow!("no child pid"))?;
 
     let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
@@ -65,8 +71,12 @@ async fn eio_on_child_death() -> anyhow::Result<()> {
     let (_input_tx, input_rx) = mpsc::channel::<BackendInput>(64);
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty =
-        NativePty::spawn(&["/bin/sh".into(), "-c".into(), "echo hi; exit 1".into()], 80, 24, &[])?;
+    let mut pty = NativePty::spawn(
+        &["/bin/sh".into(), "-c".into(), "echo hi; exit 1".into()],
+        FALLBACK_TERM_COLS,
+        FALLBACK_TERM_ROWS,
+        &[],
+    )?;
 
     let status = pty.run(output_tx, input_rx, resize_rx).await?;
     assert_eq!(status.code, Some(1), "expected exit code 1, got {status:?}");
@@ -87,7 +97,8 @@ async fn resize_reflected_in_stty() -> anyhow::Result<()> {
     let (input_tx, input_rx) = mpsc::channel::<BackendInput>(64);
     let (resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty = NativePty::spawn(&["/bin/sh".into()], 80, 24, &[])?;
+    let mut pty =
+        NativePty::spawn(&["/bin/sh".into()], FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS, &[])?;
 
     let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
 
@@ -145,12 +156,14 @@ async fn resize_reflected_in_stty() -> anyhow::Result<()> {
 async fn large_output_through_session() -> anyhow::Result<()> {
     let config = Config::test();
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new()
-        .ring_size(1_048_576) // 1MB
-        .build_with_sender(input_tx);
+    let app_state = AppStateBuilder::new().ring_size(DEFAULT_RING_SIZE).build_with_sender(input_tx);
 
-    let backend =
-        NativePty::spawn(&["/bin/sh".into(), "-c".into(), "seq 1 10000".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["/bin/sh".into(), "-c".into(), "seq 1 10000".into()],
+        FALLBACK_TERM_COLS,
+        FALLBACK_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),
@@ -207,7 +220,8 @@ async fn rapid_input_output() -> anyhow::Result<()> {
     let (input_tx, input_rx) = mpsc::channel::<BackendInput>(256);
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty = NativePty::spawn(&["/bin/cat".into()], 80, 24, &[])?;
+    let mut pty =
+        NativePty::spawn(&["/bin/cat".into()], FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS, &[])?;
     let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
 
     // Send 100 short lines rapidly
@@ -242,9 +256,11 @@ async fn rapid_input_output() -> anyhow::Result<()> {
 async fn signal_delivery_sigint() -> anyhow::Result<()> {
     let config = Config::test();
     let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx.clone());
+    let app_state =
+        AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx.clone());
 
-    let backend = NativePty::spawn(&["/bin/cat".into()], 80, 24, &[])?;
+    let backend =
+        NativePty::spawn(&["/bin/cat".into()], FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS, &[])?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),

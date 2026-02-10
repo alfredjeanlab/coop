@@ -139,7 +139,7 @@ pub struct StopState {
 impl StopState {
     /// Create a new `StopState` with the given initial config and resolve URL.
     pub fn new(config: StopConfig, resolve_url: String) -> Self {
-        let (stop_tx, _) = broadcast::channel(64);
+        let (stop_tx, _) = broadcast::channel(crate::CHANNEL_CAP_SIGNAL);
         Self {
             config: RwLock::new(config),
             signaled: AtomicBool::new(false),

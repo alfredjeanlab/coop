@@ -251,7 +251,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::StreamOutputRequest>,
     ) -> Result<Response<Self::StreamOutputStream>, Status> {
         let from_offset = request.into_inner().from_offset;
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(crate::CHANNEL_CAP_SIGNAL);
 
         // Replay buffered data from ring buffer
         {

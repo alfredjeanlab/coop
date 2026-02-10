@@ -17,6 +17,10 @@ use crate::config::GroomLevel;
 use crate::driver::{
     AgentState, AgentType, Detector, ExitStatus, NudgeEncoder, NudgeStep, RespondEncoder,
 };
+use crate::{CHANNEL_CAP_IO, CHANNEL_CAP_SIGNAL, FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS};
+
+/// Ring buffer size for tests (64 KiB).
+pub const TEST_RING_SIZE: usize = 65_536;
 use crate::event::{InputEvent, OutputEvent, PromptAction, TransitionEvent};
 use crate::pty::Backend;
 use crate::ring::RingBuffer;
@@ -116,13 +120,13 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<Store> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<TransitionEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptAction>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(CHANNEL_CAP_IO);
+        let (state_tx, _) = broadcast::channel::<TransitionEvent>(CHANNEL_CAP_SIGNAL);
+        let (prompt_tx, _) = broadcast::channel::<PromptAction>(CHANNEL_CAP_SIGNAL);
 
         Arc::new(Store {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),

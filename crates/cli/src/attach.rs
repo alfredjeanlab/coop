@@ -23,6 +23,7 @@ use nix::sys::termios;
 use tokio::sync::mpsc;
 
 use crate::transport::ws::{ClientMessage, ServerMessage};
+use crate::{CHANNEL_CAP_SIGNAL, FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS};
 
 /// CLI arguments for `coop attach`.
 #[derive(Debug, Parser)]
@@ -367,12 +368,13 @@ async fn attach(
     let mut stdout = std::io::stdout();
 
     // Determine initial terminal size.
-    let (init_cols, init_rows) = terminal_size().unwrap_or((80, 24));
+    let (init_cols, init_rows) =
+        terminal_size().unwrap_or((FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS));
     let mut state = AttachState::new(init_cols, init_rows);
     let mut sl_active = sl_cfg.enabled && init_rows > 2;
 
     // Spawn a blocking thread to read stdin (lives across reconnects).
-    let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(64);
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(CHANNEL_CAP_SIGNAL);
     std::thread::spawn(move || {
         use std::io::Read;
         let stdin = std::io::stdin();

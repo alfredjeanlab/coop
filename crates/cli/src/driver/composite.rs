@@ -40,7 +40,8 @@ impl CompositeDetector {
         shutdown: CancellationToken,
     ) {
         // Internal channel where each detector sends (tier, state, cause).
-        let (tag_tx, mut tag_rx) = mpsc::channel::<(u8, AgentState, String)>(64);
+        let (tag_tx, mut tag_rx) =
+            mpsc::channel::<(u8, AgentState, String)>(crate::CHANNEL_CAP_SIGNAL);
 
         // Spawn each detector with a forwarding task that tags with tier.
         for detector in self.tiers.drain(..) {
