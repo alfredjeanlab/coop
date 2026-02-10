@@ -255,7 +255,7 @@ impl proto::coop_server::Coop for CoopGrpc {
             state: agent.as_str().to_owned(),
             since_seq: self.state.driver.state_seq.load(Ordering::Acquire),
             screen_seq: screen.seq(),
-            detection_tier: self.state.driver.detection_tier_str(),
+            detection_tier: self.state.driver.detection_tier_str().await,
             prompt: agent.prompt().map(prompt_to_proto),
             error_detail: self.state.driver.error.read().await.as_ref().map(|e| e.detail.clone()),
             error_category: self

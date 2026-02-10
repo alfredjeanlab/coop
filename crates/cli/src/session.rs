@@ -260,7 +260,7 @@ impl Session {
 
                         // Store metadata for the HTTP/gRPC API.
                         self.app_state.driver.state_seq.store(state_seq, std::sync::atomic::Ordering::Release);
-                        self.app_state.driver.detection_tier.store(detected.tier, std::sync::atomic::Ordering::Release);
+                        *self.app_state.driver.detection_tier.write().await = Some(detected.tier);
                         *self.app_state.driver.detection_cause.write().await = detected.cause.clone();
 
                         let last_message = self.app_state.driver.last_message.read().await.clone();

@@ -5,7 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,7 +130,7 @@ impl AppStateBuilder {
             driver: Arc::new(DriverState {
                 agent_state: RwLock::new(self.agent_state),
                 state_seq: AtomicU64::new(0),
-                detection_tier: AtomicU8::new(u8::MAX),
+                detection_tier: RwLock::new(None),
                 detection_cause: RwLock::new(String::new()),
                 error: RwLock::new(None),
                 last_message: Arc::new(RwLock::new(None)),
