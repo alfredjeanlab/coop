@@ -13,6 +13,11 @@ use nix::unistd::Pid;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// Maximum number of polling attempts when enriching prompt options.
+const PROMPT_ENRICH_MAX_ATTEMPTS: u32 = 10;
+/// Interval between polling attempts when enriching prompt options.
+const PROMPT_ENRICH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 use tracing::{debug, warn};
 
 use crate::config::{Config, GroomLevel};
@@ -564,13 +569,10 @@ impl Session {
 /// `MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
 /// that encode to Enter/Esc.
 async fn enrich_prompt_options(app: Arc<AppState>, expected_seq: u64, parser: OptionParser) {
-    const MAX_ATTEMPTS: u32 = 10;
-    const POLL_INTERVAL: Duration = Duration::from_millis(200);
-
     let mut last_snap_lines = 0usize;
 
-    for _ in 0..MAX_ATTEMPTS {
-        tokio::time::sleep(POLL_INTERVAL).await;
+    for _ in 0..PROMPT_ENRICH_MAX_ATTEMPTS {
+        tokio::time::sleep(PROMPT_ENRICH_POLL_INTERVAL).await;
 
         // Bail if the state has changed since we spawned.
         let current_seq = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);

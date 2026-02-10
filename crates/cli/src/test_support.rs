@@ -28,6 +28,13 @@ use crate::transport::state::{
     TransportChannels,
 };
 
+/// Default terminal width for tests.
+pub const TEST_COLS: u16 = 80;
+/// Default terminal height for tests.
+pub const TEST_ROWS: u16 = 24;
+/// Default ring buffer size for tests (64 KiB).
+pub const TEST_RING_SIZE: usize = 65_536;
+
 /// Builder for constructing `AppState` in tests with sensible defaults.
 pub struct AppStateBuilder {
     ring_size: usize,
@@ -116,13 +123,15 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<AppState> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<StateChangeEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptAction>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(crate::run::OUTPUT_CHANNEL_CAPACITY);
+        let (state_tx, _) =
+            broadcast::channel::<StateChangeEvent>(crate::run::STATE_CHANNEL_CAPACITY);
+        let (prompt_tx, _) =
+            broadcast::channel::<PromptAction>(crate::run::PROMPT_CHANNEL_CAPACITY);
 
         Arc::new(AppState {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(TEST_COLS, TEST_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
