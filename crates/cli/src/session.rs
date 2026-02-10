@@ -15,6 +15,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+/// Capacity of the backend-output mpsc channel.
+const BACKEND_OUTPUT_CAPACITY: usize = 256;
+/// Capacity of the backend-input mpsc channel.
+const BACKEND_INPUT_CAPACITY: usize = 256;
+/// Capacity of the terminal-resize mpsc channel.
+const RESIZE_CHANNEL_CAPACITY: usize = 4;
+/// Capacity of the detector-event mpsc channel.
+const DETECTOR_CHANNEL_CAPACITY: usize = 64;
+
 use crate::config::{Config, GroomLevel};
 use crate::driver::{
     classify_error_detail, disruption_option, AgentState, CompositeDetector, DetectedState,
@@ -108,9 +117,10 @@ impl Session {
         let _ = backend.resize(config.cols, config.rows);
 
         // Create backend I/O channels
-        let (backend_output_tx, backend_output_rx) = mpsc::channel(256);
-        let (backend_input_tx, backend_input_rx) = mpsc::channel::<BackendInput>(256);
-        let (resize_tx, resize_rx) = mpsc::channel(4);
+        let (backend_output_tx, backend_output_rx) = mpsc::channel(BACKEND_OUTPUT_CAPACITY);
+        let (backend_input_tx, backend_input_rx) =
+            mpsc::channel::<BackendInput>(BACKEND_INPUT_CAPACITY);
+        let (resize_tx, resize_rx) = mpsc::channel(RESIZE_CHANNEL_CAPACITY);
 
         // Spawn backend task
         let backend_handle = tokio::spawn(async move {
@@ -118,7 +128,7 @@ impl Session {
         });
 
         // Build and spawn the composite detector (tier resolution + dedup).
-        let (detector_tx, detector_rx) = mpsc::channel(64);
+        let (detector_tx, detector_rx) = mpsc::channel(DETECTOR_CHANNEL_CAPACITY);
         let composite = CompositeDetector { tiers: detectors };
         let detector_shutdown = shutdown.clone();
         tokio::spawn(composite.run(detector_tx, detector_shutdown));

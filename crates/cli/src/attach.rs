@@ -22,6 +22,11 @@ use futures_util::{SinkExt, StreamExt};
 use nix::sys::termios;
 use tokio::sync::mpsc;
 
+/// Fallback terminal width when `terminal_size()` fails (standard VT100).
+const FALLBACK_COLS: u16 = 80;
+/// Fallback terminal height when `terminal_size()` fails (standard VT100).
+const FALLBACK_ROWS: u16 = 24;
+
 use crate::transport::ws::{ClientMessage, ServerMessage};
 
 /// CLI arguments for `coop attach`.
@@ -367,7 +372,7 @@ async fn attach(
     let mut stdout = std::io::stdout();
 
     // Determine initial terminal size.
-    let (init_cols, init_rows) = terminal_size().unwrap_or((80, 24));
+    let (init_cols, init_rows) = terminal_size().unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
     let mut state = AttachState::new(init_cols, init_rows);
     let mut sl_active = sl_cfg.enabled && init_rows > 2;
 

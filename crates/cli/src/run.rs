@@ -14,6 +14,15 @@ use tracing::{error, info};
 
 use tracing_subscriber::EnvFilter;
 
+/// Capacity of the input (client → session) mpsc channel.
+pub(crate) const INPUT_CHANNEL_CAPACITY: usize = 256;
+/// Capacity of the output event broadcast channel.
+pub(crate) const OUTPUT_BROADCAST_CAPACITY: usize = 256;
+/// Capacity of the agent-state broadcast channel.
+pub(crate) const STATE_BROADCAST_CAPACITY: usize = 64;
+/// Capacity of the prompt-action broadcast channel.
+pub(crate) const PROMPT_BROADCAST_CAPACITY: usize = 64;
+
 use crate::config::{self, Config, GroomLevel};
 use crate::driver::claude::resume;
 use crate::driver::claude::setup::{self as claude_setup, ClaudeSessionSetup};
@@ -301,10 +310,10 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
     };
 
     // Create shared channels
-    let (input_tx, consumer_input_rx) = mpsc::channel(256);
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-    let (prompt_tx, _) = broadcast::channel(64);
+    let (input_tx, consumer_input_rx) = mpsc::channel(INPUT_CHANNEL_CAPACITY);
+    let (output_tx, _) = broadcast::channel(OUTPUT_BROADCAST_CAPACITY);
+    let (state_tx, _) = broadcast::channel(STATE_BROADCAST_CAPACITY);
+    let (prompt_tx, _) = broadcast::channel(PROMPT_BROADCAST_CAPACITY);
 
     let resolve_url = format!("{coop_url_for_setup}/api/v1/hooks/stop/resolve");
     let stop_state = Arc::new(StopState::new(stop_config, resolve_url));
