@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use coop::driver::AgentState;
 use coop::event::{OutputEvent, StateChangeEvent};
-use coop::test_support::{spawn_http_server, AppStateBuilder};
+use coop::test_support::{spawn_http_server, AppStateBuilder, TEST_RING_SIZE};
 
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -120,7 +120,7 @@ async fn ws_auth_message() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ws_subscription_mode_raw() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (addr, _handle) = spawn_http_server(Arc::clone(&app_state)).await?;
 
     let (mut _tx, mut rx) = ws_connect(&addr, "mode=raw").await?;
@@ -154,7 +154,7 @@ async fn ws_subscription_mode_raw() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ws_subscription_mode_state() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (addr, _handle) = spawn_http_server(Arc::clone(&app_state)).await?;
 
     let (mut _tx, mut rx) = ws_connect(&addr, "mode=state").await?;
@@ -189,7 +189,7 @@ async fn ws_subscription_mode_state() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ws_subscription_mode_screen() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (addr, _handle) = spawn_http_server(Arc::clone(&app_state)).await?;
 
     let (mut _tx, mut rx) = ws_connect(&addr, "mode=screen").await?;
@@ -210,7 +210,7 @@ async fn ws_subscription_mode_screen() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ws_replay_from_offset() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
 
     // Write known data to ring buffer
     {
@@ -239,7 +239,7 @@ async fn ws_replay_from_offset() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ws_concurrent_readers() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (addr, _handle) = spawn_http_server(Arc::clone(&app_state)).await?;
 
     // Connect 5 clients with state mode

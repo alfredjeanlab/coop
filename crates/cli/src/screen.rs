@@ -3,6 +3,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Standard VT100 terminal width.
+pub const DEFAULT_COLS: u16 = 80;
+/// Standard VT100 terminal height.
+pub const DEFAULT_ROWS: u16 = 24;
+
 /// Opaque terminal screen backed by an avt virtual terminal.
 pub struct Screen {
     vt: avt::Vt,

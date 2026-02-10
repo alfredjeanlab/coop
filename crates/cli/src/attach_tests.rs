@@ -3,6 +3,8 @@
 
 use super::*;
 
+use crate::test_support::TEST_RING_SIZE;
+
 /// Guard for tests that mutate environment variables. Prevents parallel races.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -229,7 +231,7 @@ mod ws_integration {
     async fn spawn_test_server(
         output_chunks: Vec<&str>,
     ) -> (std::net::SocketAddr, std::sync::Arc<crate::transport::state::AppState>) {
-        let (state, _input_rx) = AppStateBuilder::new().ring_size(65536).build();
+        let (state, _input_rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
 
         // Write output chunks to ring buffer and broadcast them.
         {

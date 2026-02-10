@@ -374,8 +374,9 @@ impl proto::coop_server::Coop for CoopGrpc {
         &self,
         request: Request<proto::StreamOutputRequest>,
     ) -> Result<Response<Self::StreamOutputStream>, Status> {
+        const STREAM_CHANNEL_CAPACITY: usize = 64;
         let from_offset = request.into_inner().from_offset;
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(STREAM_CHANNEL_CAPACITY);
 
         // Replay buffered data from ring buffer
         {

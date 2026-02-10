@@ -11,6 +11,7 @@ use bytes::Bytes;
 use coop::driver::ExitStatus;
 use coop::pty::adapter::TmuxBackend;
 use coop::pty::{Backend, BackendInput};
+use coop::screen;
 use std::path::PathBuf;
 use std::process::Command;
 use tokio::sync::mpsc;
@@ -33,7 +34,16 @@ impl TmuxSession {
         let status = Command::new("tmux")
             .args(["-S"])
             .arg(&socket)
-            .args(["new-session", "-d", "-s", name, "-x", "80", "-y", "24"])
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                name,
+                "-x",
+                &screen::DEFAULT_COLS.to_string(),
+                "-y",
+                &screen::DEFAULT_ROWS.to_string(),
+            ])
             .status()?;
         anyhow::ensure!(status.success(), "failed to create tmux session");
 
