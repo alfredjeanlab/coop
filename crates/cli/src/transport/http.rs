@@ -179,7 +179,7 @@ pub struct ReadyResponse {
 
 /// `GET /api/v1/ready` — readiness probe (200 when ready, 503 otherwise).
 pub async fn ready(State(s): State<Arc<AppState>>) -> impl IntoResponse {
-    let is_ready = s.ready.load(Ordering::Acquire);
+    let is_ready = s.driver.ready.load(Ordering::Acquire);
     let status = if is_ready {
         axum::http::StatusCode::OK
     } else {

@@ -57,7 +57,7 @@ fn to_domain_answers_converts_fields() {
 #[tokio::test]
 async fn compute_health_fields() -> anyhow::Result<()> {
     let (state, _rx) = AppStateBuilder::new().child_pid(1234).build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
 
     let h = compute_health(&state).await;
     assert_eq!(h.status, "running");
@@ -97,7 +97,7 @@ async fn compute_status_exited() -> anyhow::Result<()> {
         .child_pid(100)
         .agent_state(AgentState::Exited { status: ExitStatus { code: Some(1), signal: None } })
         .build();
-    *state.terminal.exit_status.write().await = Some(ExitStatus { code: Some(1), signal: None });
+    *state.driver.exit_status.write().await = Some(ExitStatus { code: Some(1), signal: None });
     let st = compute_status(&state).await;
     assert_eq!(st.state, "exited");
     assert_eq!(st.exit_code, Some(1));
@@ -117,7 +117,7 @@ async fn nudge_not_ready_returns_error() -> anyhow::Result<()> {
 #[tokio::test]
 async fn nudge_no_driver_returns_error() -> anyhow::Result<()> {
     let (state, _rx) = AppStateBuilder::new().build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
     let result = handle_nudge(&state, "hello").await;
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), crate::error::ErrorCode::NoDriver);
@@ -130,7 +130,7 @@ async fn nudge_busy_returns_soft_failure() -> anyhow::Result<()> {
         .agent_state(AgentState::Working)
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
 
     let result = handle_nudge(&state, "hello").await.map_err(|e| anyhow::anyhow!("{e}"))?;
     assert!(!result.delivered);
@@ -145,7 +145,7 @@ async fn nudge_waiting_delivers() -> anyhow::Result<()> {
         .agent_state(AgentState::Idle)
         .nudge_encoder(Arc::new(StubNudgeEncoder))
         .build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
 
     let result = handle_nudge(&state, "hello").await.map_err(|e| anyhow::anyhow!("{e}"))?;
     assert!(result.delivered);
@@ -178,7 +178,7 @@ async fn respond_setup_prompt_delivers_option_to_pty() -> anyhow::Result<()> {
         .agent_state(setup_state)
         .respond_encoder(Arc::new(StubRespondEncoder))
         .build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
 
     let result = handle_respond(&state, None, Some(2), None, &[])
         .await
@@ -198,7 +198,7 @@ async fn respond_no_prompt_returns_soft_failure() -> anyhow::Result<()> {
         .agent_state(AgentState::Working)
         .respond_encoder(Arc::new(StubRespondEncoder))
         .build();
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
 
     let result = handle_respond(&state, Some(true), None, None, &[])
         .await

@@ -243,7 +243,7 @@ async fn resize_zero_rows_returns_error() -> anyhow::Result<()> {
 #[tokio::test]
 async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::Working);
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
     let client_id = "test-ws";
 
     let msg = ClientMessage::Nudge { message: "hello".to_owned() };
@@ -262,7 +262,7 @@ async fn nudge_rejected_when_agent_working() -> anyhow::Result<()> {
 #[tokio::test]
 async fn nudge_accepted_when_agent_waiting() -> anyhow::Result<()> {
     let (state, _rx) = ws_test_state(AgentState::Idle);
-    state.ready.store(true, std::sync::atomic::Ordering::Release);
+    state.driver.ready.store(true, std::sync::atomic::Ordering::Release);
     let client_id = "test-ws";
 
     let msg = ClientMessage::Nudge { message: "hello".to_owned() };
