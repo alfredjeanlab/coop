@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use super::hooks::generate_hook_config;
+use crate::config::{AgentSettings, McpConfig};
 
 /// Everything needed to spawn a Gemini session.
 pub struct GeminiSessionSetup {
@@ -35,8 +36,8 @@ pub struct GeminiSessionSetup {
 pub fn prepare_gemini_session(
     _working_dir: &Path,
     coop_url: &str,
-    base_settings: Option<&serde_json::Value>,
-    mcp_config: Option<&serde_json::Value>,
+    base_settings: Option<&AgentSettings>,
+    mcp_config: Option<&McpConfig>,
 ) -> anyhow::Result<GeminiSessionSetup> {
     let temp_dir = tempfile::tempdir()?;
     let hook_pipe_path = temp_dir.path().join("hook.pipe");
@@ -60,8 +61,8 @@ pub fn prepare_gemini_session(
 fn write_settings_file(
     dir: &Path,
     pipe_path: &Path,
-    base_settings: Option<&serde_json::Value>,
-    mcp_config: Option<&serde_json::Value>,
+    base_settings: Option<&AgentSettings>,
+    mcp_config: Option<&McpConfig>,
 ) -> anyhow::Result<PathBuf> {
     let coop_config = generate_hook_config(pipe_path);
     let mut merged = match base_settings {
@@ -71,9 +72,7 @@ fn write_settings_file(
     // Gemini reads mcpServers from settings.json (not a separate file).
     // The `mcp` field holds the server map directly.
     if let Some(mcp) = mcp_config {
-        if let Some(obj) = merged.as_object_mut() {
-            obj.insert("mcpServers".to_string(), mcp.clone());
-        }
+        merged.extra.insert("mcpServers".to_string(), serde_json::to_value(mcp)?);
     }
     let path = dir.join("coop-gemini-settings.json");
     let contents = serde_json::to_string_pretty(&merged)?;

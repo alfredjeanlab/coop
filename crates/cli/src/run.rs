@@ -548,8 +548,8 @@ fn prepare_pristine_extras(
     agent: AgentType,
     working_dir: &std::path::Path,
     coop_url: &str,
-    base_settings: Option<&serde_json::Value>,
-    mcp_config: Option<&serde_json::Value>,
+    base_settings: Option<&config::AgentSettings>,
+    mcp_config: Option<&config::McpConfig>,
 ) -> anyhow::Result<PristineExtras> {
     let mut extra_args = Vec::new();
     let mut extra_env = vec![("COOP_URL".to_string(), coop_url.to_string())];
@@ -590,11 +590,9 @@ fn prepare_pristine_extras(
                 let session_dir = claude_setup::coop_session_dir(&dir_id)?;
 
                 // Build settings with MCP embedded (no hooks).
-                let mut settings = base_settings.cloned().unwrap_or(serde_json::json!({}));
+                let mut settings = base_settings.cloned().unwrap_or_default();
                 if let Some(mcp) = mcp_config {
-                    if let Some(obj) = settings.as_object_mut() {
-                        obj.insert("mcpServers".to_string(), mcp.clone());
-                    }
+                    settings.extra.insert("mcpServers".to_string(), serde_json::to_value(mcp)?);
                 }
                 let path = session_dir.join("coop-gemini-settings.json");
                 std::fs::write(&path, serde_json::to_string_pretty(&settings)?)?;

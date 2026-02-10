@@ -6,6 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::{prepare_claude_session, project_dir_name};
+use crate::config::AgentSettings;
 
 #[test]
 fn project_dir_name_strips_leading_separator() {
@@ -80,13 +81,13 @@ fn prepare_session_pipe_path_in_temp_dir() -> anyhow::Result<()> {
 #[test]
 fn prepare_session_with_base_settings_merges_hooks() -> anyhow::Result<()> {
     let work_dir = tempfile::tempdir()?;
-    let orchestrator = json!({
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "gt-prime"}]}],
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gt-guard"}]}]
         },
         "permissions": { "allow": ["Bash", "Read"] }
-    });
+    }))?;
     let setup = prepare_claude_session(work_dir.path(), "http://127.0.0.1:0", Some(&orchestrator))?;
 
     let settings_arg_idx = setup

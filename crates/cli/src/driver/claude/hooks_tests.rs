@@ -6,18 +6,21 @@ use std::path::Path;
 use super::{generate_hook_config, hook_env_vars, write_hook_config};
 
 #[test]
-fn generated_config_has_required_hooks() {
+fn generated_config_has_required_hooks() -> anyhow::Result<()> {
     let config = generate_hook_config(Path::new("/tmp/coop.pipe"));
+    let hooks = config.hooks.as_ref().ok_or_else(|| anyhow::anyhow!("expected hooks"))?;
+
+    assert!(hooks.contains_key("SessionStart"));
+    assert!(hooks.contains_key("PostToolUse"));
+    assert!(hooks.contains_key("Stop"));
+    assert!(hooks.contains_key("Notification"));
+    assert!(hooks.contains_key("PreToolUse"));
+    assert!(hooks.contains_key("UserPromptSubmit"));
+
+    // Verify nested matcher + hooks structure via JSON values
+    let config = serde_json::to_value(&config)?;
     let hooks = &config["hooks"];
 
-    assert!(hooks.get("SessionStart").is_some());
-    assert!(hooks.get("PostToolUse").is_some());
-    assert!(hooks.get("Stop").is_some());
-    assert!(hooks.get("Notification").is_some());
-    assert!(hooks.get("PreToolUse").is_some());
-    assert!(hooks.get("UserPromptSubmit").is_some());
-
-    // Verify nested matcher + hooks structure
     let post_tool = &hooks["PostToolUse"];
     assert!(post_tool.is_array());
     assert_eq!(post_tool[0]["matcher"], "");
@@ -41,6 +44,7 @@ fn generated_config_has_required_hooks() {
     assert_eq!(pre_tool[0]["matcher"], "ExitPlanMode|AskUserQuestion|EnterPlanMode");
     assert!(pre_tool[0]["hooks"].is_array());
     assert_eq!(pre_tool[0]["hooks"][0]["type"], "command");
+    Ok(())
 }
 
 #[test]

@@ -6,19 +6,21 @@ use std::path::Path;
 use super::{generate_hook_config, hook_env_vars, write_hook_config};
 
 #[test]
-fn generated_config_has_required_hooks() {
+fn generated_config_has_required_hooks() -> anyhow::Result<()> {
     let config = generate_hook_config(Path::new("/tmp/coop.pipe"));
+    let hooks = config.hooks.as_ref().ok_or_else(|| anyhow::anyhow!("expected hooks"))?;
+
+    assert!(hooks.contains_key("SessionStart"));
+    assert!(hooks.contains_key("BeforeAgent"));
+    assert!(hooks.contains_key("BeforeTool"));
+    assert!(hooks.contains_key("AfterTool"));
+    assert!(hooks.contains_key("AfterAgent"));
+    assert!(hooks.contains_key("SessionEnd"));
+    assert!(hooks.contains_key("Notification"));
+
+    // Verify nested matcher + hooks structure via JSON values
+    let config = serde_json::to_value(&config)?;
     let hooks = &config["hooks"];
-
-    assert!(hooks.get("SessionStart").is_some());
-    assert!(hooks.get("BeforeAgent").is_some());
-    assert!(hooks.get("BeforeTool").is_some());
-    assert!(hooks.get("AfterTool").is_some());
-    assert!(hooks.get("AfterAgent").is_some());
-    assert!(hooks.get("SessionEnd").is_some());
-    assert!(hooks.get("Notification").is_some());
-
-    // Verify nested matcher + hooks structure
     for hook_name in [
         "SessionStart",
         "BeforeAgent",
@@ -34,6 +36,7 @@ fn generated_config_has_required_hooks() {
         assert!(hook[0]["hooks"].is_array(), "{hook_name} hooks should be array");
         assert_eq!(hook[0]["hooks"][0]["type"], "command", "{hook_name} type should be command");
     }
+    Ok(())
 }
 
 #[test]

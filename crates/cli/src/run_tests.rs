@@ -6,6 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::prepare_pristine_extras;
+use crate::config::{AgentSettings, McpConfig};
 use crate::driver::AgentType;
 
 // -- Claude pristine --
@@ -34,10 +35,10 @@ fn pristine_claude_no_settings_returns_session_id_and_coop_url() -> anyhow::Resu
 #[test]
 fn pristine_claude_with_settings_writes_file_without_hooks() -> anyhow::Result<()> {
     let dir = Path::new("/tmp/test-pristine");
-    let settings = json!({
+    let settings: AgentSettings = serde_json::from_value(json!({
         "permissions": { "allow": ["Bash"] },
         "env": { "FOO": "bar" }
-    });
+    }))?;
     let (args, env, _) = prepare_pristine_extras(
         AgentType::Claude,
         dir,
@@ -67,9 +68,9 @@ fn pristine_claude_with_settings_writes_file_without_hooks() -> anyhow::Result<(
 #[test]
 fn pristine_claude_with_mcp_writes_mcp_config() -> anyhow::Result<()> {
     let dir = Path::new("/tmp/test-pristine");
-    let mcp = json!({
+    let mcp: McpConfig = serde_json::from_value(json!({
         "my-server": { "command": "node", "args": ["server.js"] }
-    });
+    }))?;
     let (args, _, _) =
         prepare_pristine_extras(AgentType::Claude, dir, "http://127.0.0.1:8080", None, Some(&mcp))?;
 
@@ -90,10 +91,10 @@ fn pristine_claude_with_mcp_writes_mcp_config() -> anyhow::Result<()> {
 #[test]
 fn pristine_gemini_with_settings_and_mcp() -> anyhow::Result<()> {
     let dir = Path::new("/tmp/test-pristine");
-    let settings = json!({ "theme": "dark" });
-    let mcp = json!({
+    let settings: AgentSettings = serde_json::from_value(json!({ "theme": "dark" }))?;
+    let mcp: McpConfig = serde_json::from_value(json!({
         "tool-server": { "command": "python", "args": ["serve.py"] }
-    });
+    }))?;
     let (args, env, log_path) = prepare_pristine_extras(
         AgentType::Gemini,
         dir,
@@ -112,7 +113,9 @@ fn pristine_gemini_with_settings_and_mcp() -> anyhow::Result<()> {
     assert!(settings_env.is_some());
 
     // Settings file has MCP embedded and no hooks
-    let settings_path = Path::new(&settings_env.unwrap().1);
+    let settings_val =
+        settings_env.ok_or_else(|| anyhow::anyhow!("expected GEMINI_CLI_SYSTEM_SETTINGS_PATH"))?;
+    let settings_path = Path::new(&settings_val.1);
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(settings_path)?)?;
     assert_eq!(written["theme"], "dark");

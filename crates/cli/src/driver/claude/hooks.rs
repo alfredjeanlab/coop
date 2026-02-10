@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
-/// Generate the Claude Code hook configuration JSON.
+use crate::config::AgentSettings;
+
+/// Generate the Claude Code hook configuration.
 ///
 /// The hooks write JSON events to the named pipe at `$COOP_HOOK_PIPE`:
 /// - `PostToolUse`: fires after each tool call, writes tool name
 /// - `Stop`: curls `$COOP_URL/api/v1/hooks/stop` for a gating verdict
 /// - `Notification`: fires on `idle_prompt` and `permission_prompt`
 /// - `PreToolUse`: fires before `AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode`
-pub fn generate_hook_config(pipe_path: &Path) -> Value {
+pub fn generate_hook_config(pipe_path: &Path) -> AgentSettings {
     // Use $COOP_HOOK_PIPE so the config is portable across processes.
     // The actual path is passed via environment variable.
     let _ = pipe_path; // validated by caller; config uses env var
@@ -43,52 +46,39 @@ pub fn generate_hook_config(pipe_path: &Path) -> Value {
         "[ -n \"$response\" ] && printf '%s' \"$response\""
     );
 
-    json!({
-        "hooks": {
-            "SessionStart": [{
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": start_command
-                }]
-            }],
-            "PostToolUse": [{
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"post_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }],
-            "Stop": [{
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": stop_command
-                }]
-            }],
-            "Notification": [{
-                "matcher": "idle_prompt|permission_prompt",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"notification\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }],
-            "PreToolUse": [{
-                "matcher": "ExitPlanMode|AskUserQuestion|EnterPlanMode",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"pre_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }],
-            "UserPromptSubmit": [{
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"user_prompt_submit\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }]
-        }
-    })
+    let mut hooks = BTreeMap::new();
+    hooks.insert(
+        "SessionStart".to_string(),
+        vec![json!({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": start_command}]
+        })],
+    );
+    hooks.insert("PostToolUse".to_string(), vec![json!({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "input=$(cat); printf '{\"event\":\"post_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""}]
+    })]);
+    hooks.insert(
+        "Stop".to_string(),
+        vec![json!({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": stop_command}]
+        })],
+    );
+    hooks.insert("Notification".to_string(), vec![json!({
+        "matcher": "idle_prompt|permission_prompt",
+        "hooks": [{"type": "command", "command": "input=$(cat); printf '{\"event\":\"notification\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""}]
+    })]);
+    hooks.insert("PreToolUse".to_string(), vec![json!({
+        "matcher": "ExitPlanMode|AskUserQuestion|EnterPlanMode",
+        "hooks": [{"type": "command", "command": "input=$(cat); printf '{\"event\":\"pre_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""}]
+    })]);
+    hooks.insert("UserPromptSubmit".to_string(), vec![json!({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "input=$(cat); printf '{\"event\":\"user_prompt_submit\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""}]
+    })]);
+
+    AgentSettings { hooks: Some(hooks), ..Default::default() }
 }
 
 /// Return environment variables to set on the Claude child process.

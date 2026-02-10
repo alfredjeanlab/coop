@@ -6,7 +6,7 @@ use std::time::Duration;
 use clap::Parser;
 use serde_json::json;
 
-use super::{merge_settings, AgentFileConfig, AgentType, Config, GroomLevel};
+use super::{merge_settings, AgentFileConfig, AgentSettings, AgentType, Config, GroomLevel};
 
 fn parse(args: &[&str]) -> Config {
     Config::parse_from(args)
@@ -180,10 +180,11 @@ fn agent_file_config_deserializes_settings_and_mcp() -> anyhow::Result<()> {
         }
     });
     let config: AgentFileConfig = serde_json::from_value(input)?;
-    assert!(config.settings.is_some());
-    assert!(config.mcp.is_some());
-    let mcp = config.mcp.as_ref().unwrap();
-    assert!(mcp.get("my-server").is_some());
+    let settings = config.settings.as_ref().ok_or_else(|| anyhow::anyhow!("expected settings"))?;
+    assert!(settings.hooks.is_some());
+    assert!(settings.permissions.is_some());
+    let mcp = config.mcp.as_ref().ok_or_else(|| anyhow::anyhow!("expected mcp"))?;
+    assert!(mcp.contains_key("my-server"));
     Ok(())
 }
 
@@ -199,100 +200,113 @@ fn agent_file_config_missing_settings_and_mcp() -> anyhow::Result<()> {
 // -- merge_settings --
 
 #[test]
-fn merge_no_orchestrator_returns_coop_config() {
-    let coop = json!({
+fn merge_no_orchestrator_returns_coop_config() -> anyhow::Result<()> {
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-detect"}]}],
             "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-gate"}]}]
         }
-    });
+    }))?;
     // When orchestrator has no hooks, coop hooks should appear as-is.
-    let orchestrator = json!({});
+    let orchestrator = AgentSettings::default();
     let merged = merge_settings(&orchestrator, coop.clone());
+    let merged = serde_json::to_value(&merged)?;
+    let coop = serde_json::to_value(&coop)?;
     assert_eq!(merged["hooks"]["PostToolUse"], coop["hooks"]["PostToolUse"]);
     assert_eq!(merged["hooks"]["Stop"], coop["hooks"]["Stop"]);
+    Ok(())
 }
 
 #[test]
-fn merge_concatenates_hook_arrays_orchestrator_first() {
-    let orchestrator = json!({
+fn merge_concatenates_hook_arrays_orchestrator_first() -> anyhow::Result<()> {
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "gt-prime"}]}]
         }
-    });
-    let coop = json!({
+    }))?;
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-detect"}]}]
         }
-    });
+    }))?;
     let merged = merge_settings(&orchestrator, coop);
-    let arr = merged["hooks"]["SessionStart"].as_array().unwrap();
+    let merged = serde_json::to_value(&merged)?;
+    let arr = merged["hooks"]["SessionStart"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("expected array"))?;
     assert_eq!(arr.len(), 2);
     // Orchestrator entry first
     assert_eq!(arr[0]["hooks"][0]["command"], "gt-prime");
     // Coop entry second
     assert_eq!(arr[1]["hooks"][0]["command"], "coop-detect");
+    Ok(())
 }
 
 #[test]
-fn merge_preserves_non_hook_keys() {
-    let orchestrator = json!({
+fn merge_preserves_non_hook_keys() -> anyhow::Result<()> {
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "permissions": { "allow": ["Bash", "Read"] },
         "env": { "MY_VAR": "hello" },
         "hooks": {}
-    });
-    let coop = json!({
+    }))?;
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "Stop": [{"matcher": "", "hooks": []}]
         }
-    });
+    }))?;
     let merged = merge_settings(&orchestrator, coop);
+    let merged = serde_json::to_value(&merged)?;
     assert_eq!(merged["permissions"]["allow"][0], "Bash");
     assert_eq!(merged["env"]["MY_VAR"], "hello");
+    Ok(())
 }
 
 #[test]
-fn merge_orchestrator_only_hook_types_pass_through() {
-    let orchestrator = json!({
+fn merge_orchestrator_only_hook_types_pass_through() -> anyhow::Result<()> {
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gt-guard"}]}]
         }
-    });
-    let coop = json!({
+    }))?;
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "PostToolUse": [{"matcher": "", "hooks": []}]
         }
-    });
+    }))?;
     let merged = merge_settings(&orchestrator, coop);
+    let merged = serde_json::to_value(&merged)?;
     // Orchestrator-only hook type preserved
     assert_eq!(merged["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "gt-guard");
     // Coop-only hook type added
     assert!(merged["hooks"]["PostToolUse"].as_array().is_some());
+    Ok(())
 }
 
 #[test]
-fn merge_coop_only_hook_types_appear_in_result() {
-    let orchestrator = json!({
+fn merge_coop_only_hook_types_appear_in_result() -> anyhow::Result<()> {
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": []}]
         }
-    });
-    let coop = json!({
+    }))?;
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-gate"}]}],
             "Notification": [{"matcher": "idle_prompt", "hooks": []}]
         }
-    });
+    }))?;
     let merged = merge_settings(&orchestrator, coop);
+    let merged = serde_json::to_value(&merged)?;
     assert!(merged["hooks"]["Stop"].as_array().is_some());
     assert!(merged["hooks"]["Notification"].as_array().is_some());
     // Original orchestrator hook still there
     assert!(merged["hooks"]["SessionStart"].as_array().is_some());
+    Ok(())
 }
 
 #[test]
-fn merge_realistic_gt_config() {
-    let orchestrator = json!({
+fn merge_realistic_gt_config() -> anyhow::Result<()> {
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "gt-prime-context"}]}],
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gt-sandbox-guard"}]}]
@@ -302,8 +316,8 @@ fn merge_realistic_gt_config() {
             "deny": []
         },
         "env": { "GT_WORKSPACE_ID": "ws-123" }
-    });
-    let coop = json!({
+    }))?;
+    let coop: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-start-hook"}]}],
             "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-post-tool"}]}],
@@ -312,17 +326,22 @@ fn merge_realistic_gt_config() {
             "PreToolUse": [{"matcher": "ExitPlanMode|AskUserQuestion|EnterPlanMode", "hooks": [{"type": "command", "command": "coop-pre-tool"}]}],
             "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "coop-prompt-submit"}]}]
         }
-    });
+    }))?;
     let merged = merge_settings(&orchestrator, coop);
+    let merged = serde_json::to_value(&merged)?;
 
     // SessionStart: gt-prime first, coop second
-    let session_start = merged["hooks"]["SessionStart"].as_array().unwrap();
+    let session_start = merged["hooks"]["SessionStart"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("expected array"))?;
     assert_eq!(session_start.len(), 2);
     assert_eq!(session_start[0]["hooks"][0]["command"], "gt-prime-context");
     assert_eq!(session_start[1]["hooks"][0]["command"], "coop-start-hook");
 
     // PreToolUse: gt-guard first, coop second
-    let pre_tool = merged["hooks"]["PreToolUse"].as_array().unwrap();
+    let pre_tool = merged["hooks"]["PreToolUse"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("expected array"))?;
     assert_eq!(pre_tool.len(), 2);
     assert_eq!(pre_tool[0]["hooks"][0]["command"], "gt-sandbox-guard");
     assert_eq!(pre_tool[1]["hooks"][0]["command"], "coop-pre-tool");
@@ -336,4 +355,5 @@ fn merge_realistic_gt_config() {
     // Non-hook keys pass through
     assert_eq!(merged["permissions"]["allow"][0], "Bash");
     assert_eq!(merged["env"]["GT_WORKSPACE_ID"], "ws-123");
+    Ok(())
 }
