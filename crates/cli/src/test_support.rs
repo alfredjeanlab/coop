@@ -21,12 +21,17 @@ use crate::event::{InputEvent, OutputEvent, PromptAction, TransitionEvent};
 use crate::pty::Backend;
 use crate::ring::RingBuffer;
 use crate::screen::Screen;
+use crate::screen::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::start::{StartConfig, StartState};
 use crate::stop::{StopConfig, StopState};
 use crate::transport::state::{
     DetectionInfo, DriverState, LifecycleState, SessionSettings, Store, TerminalState,
     TransportChannels,
 };
+use crate::{EVENT_CHANNEL_CAPACITY, IO_CHANNEL_CAPACITY};
+
+/// Ring buffer size used by integration tests (64 KB).
+pub const TEST_RING_SIZE: usize = 65_536;
 
 /// Builder for constructing `AppState` in tests with sensible defaults.
 pub struct AppStateBuilder {
@@ -116,13 +121,13 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<Store> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<TransitionEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptAction>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(IO_CHANNEL_CAPACITY);
+        let (state_tx, _) = broadcast::channel::<TransitionEvent>(EVENT_CHANNEL_CAPACITY);
+        let (prompt_tx, _) = broadcast::channel::<PromptAction>(EVENT_CHANNEL_CAPACITY);
 
         Arc::new(Store {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(DEFAULT_COLS, DEFAULT_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
