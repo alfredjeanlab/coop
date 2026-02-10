@@ -73,6 +73,9 @@ static PANIC_TERMIOS: Mutex<Option<(i32, nix::libc::termios)>> = Mutex::new(None
 /// Default statusline refresh interval in seconds.
 const DEFAULT_STATUSLINE_INTERVAL: u64 = 5;
 
+/// Channel capacity for stdin reads.
+const STDIN_CHANNEL_CAPACITY: usize = 64;
+
 /// Ping keepalive interval.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -367,12 +370,13 @@ async fn attach(
     let mut stdout = std::io::stdout();
 
     // Determine initial terminal size.
-    let (init_cols, init_rows) = terminal_size().unwrap_or((80, 24));
+    let (init_cols, init_rows) =
+        terminal_size().unwrap_or((crate::DEFAULT_TERMINAL_COLS, crate::DEFAULT_TERMINAL_ROWS));
     let mut state = AttachState::new(init_cols, init_rows);
     let mut sl_active = sl_cfg.enabled && init_rows > 2;
 
     // Spawn a blocking thread to read stdin (lives across reconnects).
-    let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(64);
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(STDIN_CHANNEL_CAPACITY);
     std::thread::spawn(move || {
         use std::io::Read;
         let stdin = std::io::stdin();

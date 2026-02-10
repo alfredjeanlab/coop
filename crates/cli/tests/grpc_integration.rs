@@ -11,8 +11,9 @@ use tokio_stream::StreamExt;
 
 use coop::driver::AgentState;
 use coop::event::{OutputEvent, StateChangeEvent};
-use coop::test_support::{spawn_grpc_server, AppStateBuilder, StubNudgeEncoder};
+use coop::test_support::{spawn_grpc_server, AppStateBuilder, StubNudgeEncoder, TEST_RING_SIZE};
 use coop::transport::grpc::proto;
+use coop::{DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS};
 
 async fn grpc_client(
     app_state: Arc<coop::transport::AppState>,
@@ -52,8 +53,8 @@ async fn grpc_get_screen() -> anyhow::Result<()> {
 
     // With cursor
     let resp = client.get_screen(proto::GetScreenRequest { cursor: true }).await?.into_inner();
-    assert_eq!(resp.cols, 80);
-    assert_eq!(resp.rows, 24);
+    assert_eq!(resp.cols, i32::from(DEFAULT_TERMINAL_COLS));
+    assert_eq!(resp.rows, i32::from(DEFAULT_TERMINAL_ROWS));
     assert!(!resp.alt_screen);
     assert!(resp.cursor.is_some());
 
@@ -165,7 +166,7 @@ async fn grpc_send_signal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn grpc_stream_output() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (mut client, state) = grpc_client(app_state).await?;
 
     let mut stream =
@@ -233,8 +234,8 @@ async fn grpc_stream_screen() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("stream ended"))?
         .map_err(|e| anyhow::anyhow!("stream error: {e}"))?;
 
-    assert_eq!(snap.cols, 80);
-    assert_eq!(snap.rows, 24);
+    assert_eq!(snap.cols, i32::from(DEFAULT_TERMINAL_COLS));
+    assert_eq!(snap.rows, i32::from(DEFAULT_TERMINAL_ROWS));
 
     Ok(())
 }

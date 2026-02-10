@@ -27,6 +27,10 @@ use crate::transport::state::{
     AppState, DetectionInfo, DriverState, LifecycleState, SessionSettings, TerminalState,
     TransportChannels,
 };
+use crate::{DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS};
+
+/// Ring buffer size for tests (64 KB).
+pub const TEST_RING_SIZE: usize = 65_536;
 
 /// Builder for constructing `AppState` in tests with sensible defaults.
 pub struct AppStateBuilder {
@@ -122,7 +126,7 @@ impl AppStateBuilder {
 
         Arc::new(AppState {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),

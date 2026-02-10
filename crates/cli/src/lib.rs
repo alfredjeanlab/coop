@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
+/// Standard terminal width, used as test default and runtime fallback.
+pub const DEFAULT_TERMINAL_COLS: u16 = 80;
+/// Standard terminal height, used as test default and runtime fallback.
+pub const DEFAULT_TERMINAL_ROWS: u16 = 24;
+
 pub mod attach;
 pub mod config;
 pub mod driver;
