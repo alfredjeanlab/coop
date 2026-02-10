@@ -11,6 +11,11 @@
 //! built-in), the bottom row of the terminal is reserved for a status bar
 //! using DECSTBM scroll region margins.
 
+/// Fallback terminal columns when size detection fails.
+const FALLBACK_COLS: u16 = 80;
+/// Fallback terminal rows when size detection fails.
+const FALLBACK_ROWS: u16 = 24;
+
 use std::io::Write;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::{Mutex, Once};
@@ -367,7 +372,7 @@ async fn attach(
     let mut stdout = std::io::stdout();
 
     // Determine initial terminal size.
-    let (init_cols, init_rows) = terminal_size().unwrap_or((80, 24));
+    let (init_cols, init_rows) = terminal_size().unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
     let mut state = AttachState::new(init_cols, init_rows);
     let mut sl_active = sl_cfg.enabled && init_rows > 2;
 
