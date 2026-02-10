@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::SIGNAL_CHANNEL_CAPACITY;
+
 /// Top-level stop hook configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopConfig {
@@ -139,7 +141,7 @@ pub struct StopState {
 impl StopState {
     /// Create a new `StopState` with the given initial config and resolve URL.
     pub fn new(config: StopConfig, resolve_url: String) -> Self {
-        let (stop_tx, _) = broadcast::channel(64);
+        let (stop_tx, _) = broadcast::channel(SIGNAL_CHANNEL_CAPACITY);
         Self {
             config: RwLock::new(config),
             signaled: AtomicBool::new(false),

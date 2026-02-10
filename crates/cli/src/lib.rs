@@ -16,3 +16,15 @@ pub mod start;
 pub mod stop;
 pub mod test_support;
 pub mod transport;
+
+/// Channel capacity for high-throughput data paths (PTY I/O, backend I/O).
+pub const IO_CHANNEL_CAPACITY: usize = 256;
+
+/// Channel capacity for lower-throughput signaling (state transitions, prompts, detectors).
+pub const SIGNAL_CHANNEL_CAPACITY: usize = 64;
+
+/// Default terminal columns used as fallback when size cannot be detected.
+pub const DEFAULT_TERM_COLS: u16 = 80;
+
+/// Default terminal rows used as fallback when size cannot be detected.
+pub const DEFAULT_TERM_ROWS: u16 = 24;

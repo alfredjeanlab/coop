@@ -9,8 +9,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use tracing::{debug, trace};
-
 use crate::config::Config;
 use crate::driver::{AgentState, Detector, PromptContext, PromptKind};
 use crate::screen::ScreenSnapshot;

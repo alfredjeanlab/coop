@@ -11,7 +11,7 @@ use tokio_stream::StreamExt;
 
 use coop::driver::AgentState;
 use coop::event::{OutputEvent, TransitionEvent};
-use coop::test_support::{spawn_grpc_server, AppStateBuilder, StubNudgeEncoder};
+use coop::test_support::{spawn_grpc_server, AppStateBuilder, StubNudgeEncoder, TEST_RING_SIZE};
 use coop::transport::grpc::proto;
 
 async fn grpc_client(
@@ -165,7 +165,7 @@ async fn grpc_send_signal() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn grpc_stream_output() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let (mut client, state) = grpc_client(app_state).await?;
 
     let mut stream =

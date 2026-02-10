@@ -11,15 +11,23 @@ use crate::config::{Config, GroomLevel};
 use crate::driver::{AgentState, PromptContext, PromptKind};
 use crate::pty::spawn::NativePty;
 use crate::session::{Session, SessionConfig};
-use crate::test_support::{AppStateBuilder, MockDetector, MockPty, StubRespondEncoder};
+use crate::test_support::{
+    AppStateBuilder, MockDetector, MockPty, StubRespondEncoder, TEST_RING_SIZE,
+};
+use crate::{DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS, SIGNAL_CHANNEL_CAPACITY};
 
 #[tokio::test]
 async fn echo_exits_with_zero() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
 
-    let backend = NativePty::spawn(&["echo".into(), "hello".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["echo".into(), "hello".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(&config, SessionConfig::new(app_state, backend, consumer_input_rx));
 
     let status = session.run(&config).await?;
@@ -30,10 +38,15 @@ async fn echo_exits_with_zero() -> anyhow::Result<()> {
 #[tokio::test]
 async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
 
-    let backend = NativePty::spawn(&["echo".into(), "hello-ring".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["echo".into(), "hello-ring".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),
@@ -63,13 +76,17 @@ async fn output_captured_in_ring_and_screen() -> anyhow::Result<()> {
 async fn shutdown_cancels_session() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(0);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     // Long-running command
-    let backend =
-        NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 60".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(app_state, backend, consumer_input_rx).with_shutdown(shutdown.clone()),
@@ -92,8 +109,8 @@ async fn shutdown_cancels_session() -> anyhow::Result<()> {
 async fn graceful_drain_kills_when_already_idle() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(2000);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = MockPty::new().drain_input();
@@ -128,8 +145,8 @@ async fn graceful_drain_kills_when_already_idle() -> anyhow::Result<()> {
 async fn graceful_drain_timeout_force_kills() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(500);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = MockPty::new().drain_input();
@@ -168,8 +185,8 @@ async fn graceful_drain_timeout_force_kills() -> anyhow::Result<()> {
 async fn graceful_drain_disabled_when_zero() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(0);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
     let backend = MockPty::new().drain_input();
@@ -215,9 +232,9 @@ fn disruption_prompt() -> AgentState {
 async fn groom_auto_dismisses_disruption() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(0);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
     let app_state = AppStateBuilder::new()
-        .ring_size(65536)
+        .ring_size(TEST_RING_SIZE)
         .groom(GroomLevel::Auto)
         .respond_encoder(Arc::new(StubRespondEncoder))
         .build_with_sender(input_tx);
@@ -260,9 +277,9 @@ async fn groom_auto_dismisses_disruption() -> anyhow::Result<()> {
 async fn groom_manual_does_not_dismiss() -> anyhow::Result<()> {
     let mut config = Config::test();
     config.drain_timeout_ms = Some(0);
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
     let app_state = AppStateBuilder::new()
-        .ring_size(65536)
+        .ring_size(TEST_RING_SIZE)
         .groom(GroomLevel::Manual)
         .respond_encoder(Arc::new(StubRespondEncoder))
         .build_with_sender(input_tx);

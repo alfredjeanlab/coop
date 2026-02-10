@@ -16,18 +16,24 @@ use coop::driver::AgentState;
 use coop::event::InputEvent;
 use coop::pty::spawn::NativePty;
 use coop::session::{Session, SessionConfig};
-use coop::test_support::AppStateBuilder;
+use coop::test_support::{AppStateBuilder, TEST_RING_SIZE};
 use coop::transport::build_router;
 use coop::transport::handler::SessionStatus;
 use coop::transport::http::{HealthResponse, InputRequest, ScreenResponse};
+use coop::{DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS, SIGNAL_CHANNEL_CAPACITY};
 
 #[tokio::test]
 async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
 
-    let backend = NativePty::spawn(&["echo".into(), "integration".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["echo".into(), "integration".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),
@@ -57,10 +63,12 @@ async fn session_echo_captures_output_and_exits_zero() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_input_roundtrip() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx.clone());
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state =
+        AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx.clone());
 
-    let backend = NativePty::spawn(&["/bin/cat".into()], 80, 24, &[])?;
+    let backend =
+        NativePty::spawn(&["/bin/cat".into()], DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS, &[])?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),
@@ -97,12 +105,16 @@ async fn session_input_roundtrip() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let shutdown = CancellationToken::new();
 
-    let backend =
-        NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 60".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["/bin/sh".into(), "-c".into(), "sleep 60".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(app_state, backend, consumer_input_rx).with_shutdown(shutdown.clone()),
@@ -122,10 +134,10 @@ async fn session_shutdown_terminates_child() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_exited_state_broadcast() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
 
-    let backend = NativePty::spawn(&["true".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(&["true".into()], DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS, &[])?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),
@@ -148,7 +160,7 @@ async fn session_exited_state_broadcast() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_health_endpoint() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -164,7 +176,7 @@ async fn http_health_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_status_endpoint() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -178,7 +190,7 @@ async fn http_status_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_screen_endpoint() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -193,7 +205,7 @@ async fn http_screen_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_screen_text_endpoint() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -207,8 +219,8 @@ async fn http_screen_text_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_input_endpoint() -> anyhow::Result<()> {
-    let (input_tx, mut consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, mut consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -234,7 +246,7 @@ async fn http_input_endpoint() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_nudge_returns_not_ready_before_startup() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -250,7 +262,7 @@ async fn http_nudge_returns_not_ready_before_startup() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     // Mark ready so the not-ready gate is passed
     app_state.ready.store(true, std::sync::atomic::Ordering::Release);
     let router = build_router(app_state);
@@ -269,7 +281,7 @@ async fn http_nudge_returns_no_driver_for_unknown() -> anyhow::Result<()> {
 #[tokio::test]
 async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
     let (app_state, _rx) =
-        AppStateBuilder::new().ring_size(65536).auth_token("secret-token").build();
+        AppStateBuilder::new().ring_size(TEST_RING_SIZE).auth_token("secret-token").build();
 
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
@@ -307,7 +319,7 @@ async fn http_auth_rejects_bad_token() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_agent_state_endpoint() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(65536).build();
+    let (app_state, _rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
     let router = build_router(app_state);
     let server = axum_test::TestServer::new(router)?;
 
@@ -322,10 +334,15 @@ async fn http_agent_state_endpoint() -> anyhow::Result<()> {
 #[tokio::test]
 async fn full_stack_echo_screen_via_http() -> anyhow::Result<()> {
     let config = Config::test();
-    let (input_tx, consumer_input_rx) = mpsc::channel(64);
-    let app_state = AppStateBuilder::new().ring_size(65536).build_with_sender(input_tx);
+    let (input_tx, consumer_input_rx) = mpsc::channel(SIGNAL_CHANNEL_CAPACITY);
+    let app_state = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build_with_sender(input_tx);
 
-    let backend = NativePty::spawn(&["echo".into(), "fullstack".into()], 80, 24, &[])?;
+    let backend = NativePty::spawn(
+        &["echo".into(), "fullstack".into()],
+        DEFAULT_TERM_COLS,
+        DEFAULT_TERM_ROWS,
+        &[],
+    )?;
     let session = Session::new(
         &config,
         SessionConfig::new(Arc::clone(&app_state), backend, consumer_input_rx),

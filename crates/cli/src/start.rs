@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+
+use crate::SIGNAL_CHANNEL_CAPACITY;
 use tokio::sync::RwLock;
 
 /// Top-level start hook configuration.
@@ -67,7 +69,7 @@ pub struct StartState {
 impl StartState {
     /// Create a new `StartState` with the given initial config.
     pub fn new(config: StartConfig) -> Self {
-        let (start_tx, _) = broadcast::channel(64);
+        let (start_tx, _) = broadcast::channel(SIGNAL_CHANNEL_CAPACITY);
         Self {
             config: RwLock::new(config),
             start_tx,
