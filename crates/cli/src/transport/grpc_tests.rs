@@ -4,7 +4,7 @@
 use super::*;
 use crate::driver::AgentState;
 use crate::event::PtySignal;
-use crate::screen::{CursorPosition, ScreenSnapshot};
+use crate::screen::{CursorPosition, ScreenSnapshot, DEFAULT_COLS, DEFAULT_ROWS};
 use crate::test_support::AppStateBuilder;
 use crate::transport::encode_key;
 
@@ -28,16 +28,16 @@ fn cursor_to_proto_handles_max_u16() {
 fn screen_snapshot_to_proto_converts_all_fields() {
     let snap = ScreenSnapshot {
         lines: vec!["hello".to_owned(), "world".to_owned()],
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         alt_screen: true,
         cursor: CursorPosition { row: 1, col: 5 },
         sequence: 42,
     };
     let p = screen_snapshot_to_proto(&snap);
     assert_eq!(p.lines, vec!["hello", "world"]);
-    assert_eq!(p.cols, 80);
-    assert_eq!(p.rows, 24);
+    assert_eq!(p.cols, DEFAULT_COLS as i32);
+    assert_eq!(p.rows, DEFAULT_ROWS as i32);
     assert!(p.alt_screen);
     assert_eq!(p.seq, 42);
     let cursor = p.cursor.as_ref();

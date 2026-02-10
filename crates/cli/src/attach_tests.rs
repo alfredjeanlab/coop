@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Alfred Jean LLC
 
 use super::*;
+use crate::screen::{DEFAULT_COLS, DEFAULT_ROWS};
 
 /// Guard for tests that mutate environment variables. Prevents parallel races.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -148,8 +149,8 @@ fn builtin_statusline_format() {
 fn builtin_statusline_uptime_increases() {
     let state = AttachState {
         agent_state: "idle".to_owned(),
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         started: Instant::now() - Duration::from_secs(42),
         next_offset: 0,
     };
@@ -161,14 +162,14 @@ fn builtin_statusline_uptime_increases() {
 
 #[tokio::test]
 async fn run_statusline_cmd_captures_output() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(DEFAULT_COLS, DEFAULT_ROWS);
     let result = run_statusline_cmd("echo test-output", &state).await;
     assert_eq!(result, "test-output");
 }
 
 #[tokio::test]
 async fn run_statusline_cmd_expands_state() {
-    let mut state = AttachState::new(80, 24);
+    let mut state = AttachState::new(DEFAULT_COLS, DEFAULT_ROWS);
     state.agent_state = "idle".to_owned();
     let result = run_statusline_cmd("echo {state}", &state).await;
     assert_eq!(result, "idle");
@@ -185,8 +186,8 @@ async fn run_statusline_cmd_expands_dimensions() {
 async fn run_statusline_cmd_expands_uptime() {
     let state = AttachState {
         agent_state: "working".to_owned(),
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         started: Instant::now() - Duration::from_secs(99),
         next_offset: 0,
     };
@@ -196,14 +197,14 @@ async fn run_statusline_cmd_expands_uptime() {
 
 #[tokio::test]
 async fn run_statusline_cmd_failed_command() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(DEFAULT_COLS, DEFAULT_ROWS);
     let result = run_statusline_cmd("false", &state).await;
     assert!(result.contains("failed"));
 }
 
 #[tokio::test]
 async fn run_statusline_cmd_trims_trailing_newline() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(DEFAULT_COLS, DEFAULT_ROWS);
     let result = run_statusline_cmd("printf 'hello\\n\\n'", &state).await;
     assert_eq!(result, "hello");
 }
@@ -218,7 +219,7 @@ mod ws_integration {
     use futures_util::{SinkExt, StreamExt};
 
     use crate::event::OutputEvent;
-    use crate::test_support::AppStateBuilder;
+    use crate::test_support::{AppStateBuilder, TEST_RING_SIZE};
     use crate::transport::ws::{ClientMessage, ServerMessage};
 
     use super::*;
@@ -229,7 +230,7 @@ mod ws_integration {
     async fn spawn_test_server(
         output_chunks: Vec<&str>,
     ) -> (std::net::SocketAddr, std::sync::Arc<crate::transport::state::Store>) {
-        let (state, _input_rx) = AppStateBuilder::new().ring_size(65536).build();
+        let (state, _input_rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
 
         // Write output chunks to ring buffer and broadcast them.
         {

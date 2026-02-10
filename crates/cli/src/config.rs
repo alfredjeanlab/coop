@@ -7,6 +7,9 @@ use std::time::Duration;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+/// Default ring buffer size: 1 MiB.
+pub const DEFAULT_RING_SIZE: usize = 1_048_576;
+
 use crate::driver::AgentType;
 use crate::start::StartConfig;
 use crate::stop::StopConfig;
@@ -95,7 +98,7 @@ pub struct Config {
     pub rows: u16,
 
     /// Ring buffer size in bytes.
-    #[arg(long, env = "COOP_RING_SIZE", default_value = "1048576")]
+    #[arg(long, env = "COOP_RING_SIZE", default_value_t = DEFAULT_RING_SIZE)]
     pub ring_size: usize,
 
     /// TERM environment variable for the child process.
@@ -246,8 +249,8 @@ impl Config {
             agent: "unknown".into(),
             agent_config: None,
             attach: None,
-            cols: 80,
-            rows: 24,
+            cols: crate::screen::DEFAULT_COLS,
+            rows: crate::screen::DEFAULT_ROWS,
             ring_size: 4096,
             term: "xterm-256color".into(),
             port_health: None,

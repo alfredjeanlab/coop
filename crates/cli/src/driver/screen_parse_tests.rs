@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use crate::screen::{CursorPosition, ScreenSnapshot};
+use crate::screen::{CursorPosition, ScreenSnapshot, DEFAULT_COLS, DEFAULT_ROWS};
 
 use super::{
     classify, compile_config, AgentState, Detector, ScreenParser, ScreenPatternConfig,
@@ -11,8 +11,8 @@ use super::{
 fn make_snapshot(lines: Vec<&str>) -> ScreenSnapshot {
     ScreenSnapshot {
         lines: lines.into_iter().map(String::from).collect(),
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         alt_screen: false,
         cursor: CursorPosition { row: 0, col: 0 },
         sequence: 0,

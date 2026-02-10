@@ -2,15 +2,15 @@
 // Copyright (c) 2026 Alfred Jean LLC
 
 use crate::driver::{AgentState, PromptKind};
-use crate::screen::{CursorPosition, ScreenSnapshot};
+use crate::screen::{CursorPosition, ScreenSnapshot, DEFAULT_COLS, DEFAULT_ROWS};
 
 use super::classify_claude_screen;
 
 fn snapshot(lines: &[&str]) -> ScreenSnapshot {
     ScreenSnapshot {
         lines: lines.iter().map(|s| s.to_string()).collect(),
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         alt_screen: false,
         cursor: CursorPosition { row: 0, col: 0 },
         sequence: 1,
@@ -278,8 +278,8 @@ fn plan_context_returns_plan_kind() {
             "Step 1: Add middleware".to_string(),
             "[y] Accept  [n] Reject".to_string(),
         ],
-        cols: 80,
-        rows: 24,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
         alt_screen: false,
         cursor: CursorPosition { row: 2, col: 0 },
         sequence: 42,

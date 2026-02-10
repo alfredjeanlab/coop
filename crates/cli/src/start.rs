@@ -67,7 +67,7 @@ pub struct StartState {
 impl StartState {
     /// Create a new `StartState` with the given initial config.
     pub fn new(config: StartConfig) -> Self {
-        let (start_tx, _) = broadcast::channel(64);
+        let (start_tx, _) = broadcast::channel(crate::run::EVENT_CHANNEL_CAPACITY);
         Self {
             config: RwLock::new(config),
             start_tx,

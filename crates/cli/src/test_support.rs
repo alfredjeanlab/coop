@@ -20,13 +20,17 @@ use crate::driver::{
 use crate::event::{InputEvent, OutputEvent, PromptOutcome, TransitionEvent};
 use crate::pty::Backend;
 use crate::ring::RingBuffer;
-use crate::screen::Screen;
+use crate::run::{EVENT_CHANNEL_CAPACITY, IO_CHANNEL_CAPACITY};
+use crate::screen::{Screen, DEFAULT_COLS, DEFAULT_ROWS};
 use crate::start::{StartConfig, StartState};
 use crate::stop::{StopConfig, StopState};
 use crate::transport::state::{
     DetectionInfo, DriverState, LifecycleState, SessionSettings, Store, TerminalState,
     TransportChannels,
 };
+
+/// Ring buffer size used in tests (64 KiB) — smaller than production for speed.
+pub const TEST_RING_SIZE: usize = 65_536;
 
 /// Builder for constructing `AppState` in tests with sensible defaults.
 pub struct AppStateBuilder {
@@ -116,13 +120,13 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<Store> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<TransitionEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptOutcome>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(IO_CHANNEL_CAPACITY);
+        let (state_tx, _) = broadcast::channel::<TransitionEvent>(EVENT_CHANNEL_CAPACITY);
+        let (prompt_tx, _) = broadcast::channel::<PromptOutcome>(EVENT_CHANNEL_CAPACITY);
 
         Arc::new(Store {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(DEFAULT_COLS, DEFAULT_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
