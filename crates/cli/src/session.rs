@@ -16,6 +16,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::config::{Config, GroomLevel};
+
+/// Maximum poll attempts when enriching prompt options from screen content.
+const ENRICH_MAX_ATTEMPTS: u32 = 10;
+/// Interval between poll attempts when enriching prompt options.
+const ENRICH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 use crate::driver::{
     classify_error_detail, disruption_option, AgentState, CompositeDetector, DetectedState,
     Detector, ExitStatus, NudgeStep, OptionParser, PromptKind,
@@ -525,16 +530,13 @@ impl Session {
 ///
 /// This runs as a detached task because hook events fire before the PTY output
 /// containing numbered options reaches the screen buffer. Retries up to
-/// `MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
+/// `ENRICH_MAX_ATTEMPTS` times, then falls back to universal Accept/Cancel options
 /// that encode to Enter/Esc.
 async fn enrich_prompt_options(app: Arc<AppState>, expected_seq: u64, parser: OptionParser) {
-    const MAX_ATTEMPTS: u32 = 10;
-    const POLL_INTERVAL: Duration = Duration::from_millis(200);
-
     let mut last_snap_lines = 0usize;
 
-    for _ in 0..MAX_ATTEMPTS {
-        tokio::time::sleep(POLL_INTERVAL).await;
+    for _ in 0..ENRICH_MAX_ATTEMPTS {
+        tokio::time::sleep(ENRICH_POLL_INTERVAL).await;
 
         // Bail if the state has changed since we spawned.
         let current_seq = app.driver.state_seq.load(std::sync::atomic::Ordering::Acquire);

@@ -218,7 +218,7 @@ mod ws_integration {
     use futures_util::{SinkExt, StreamExt};
 
     use crate::event::OutputEvent;
-    use crate::test_support::AppStateBuilder;
+    use crate::test_support::{AppStateBuilder, TEST_RING_SIZE};
     use crate::transport::ws::{ClientMessage, ServerMessage};
 
     use super::*;
@@ -229,7 +229,7 @@ mod ws_integration {
     async fn spawn_test_server(
         output_chunks: Vec<&str>,
     ) -> (std::net::SocketAddr, std::sync::Arc<crate::transport::state::AppState>) {
-        let (state, _input_rx) = AppStateBuilder::new().ring_size(65536).build();
+        let (state, _input_rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
 
         // Write output chunks to ring buffer and broadcast them.
         {
