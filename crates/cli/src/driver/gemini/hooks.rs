@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use crate::config::{AgentSettings, HookDef, HookGroup};
 
-/// Generate the Gemini CLI hook configuration JSON.
+/// Generate the Gemini CLI hook configuration.
 ///
 /// Gemini hooks receive JSON on stdin and must output JSON on stdout.
 /// The hooks read stdin, wrap it, and write to the named pipe at `$COOP_HOOK_PIPE`:
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 /// - `AfterAgent`: fires after each turn; curls gating endpoint
 /// - `SessionEnd`: fires when the session ends
 /// - `Notification`: fires on system notifications (e.g. `ToolPermission`)
-pub fn generate_hook_config(pipe_path: &Path) -> Value {
+pub fn generate_hook_config(pipe_path: &Path) -> AgentSettings {
     // Use $COOP_HOOK_PIPE so the config is portable across processes.
     // The actual path is passed via environment variable.
     let _ = pipe_path; // validated by caller; config uses env var
@@ -46,59 +46,68 @@ pub fn generate_hook_config(pipe_path: &Path) -> Value {
         "if printf '%s' \"$response\" | grep -q '\"block\"'; then printf '{\"continue\":true}'; fi"
     );
 
-    json!({
-        "hooks": {
-            "SessionStart": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": session_start_command
-                }]
+    let mut settings = AgentSettings::default();
+    settings.hooks.insert(
+        "SessionStart".into(),
+        vec![HookGroup {
+            matcher: "*".into(),
+            hooks: vec![HookDef {
+                hook_type: "command".into(),
+                command: session_start_command.into(),
             }],
-            "BeforeAgent": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"before_agent\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
+        }],
+    );
+    settings.hooks.insert("BeforeAgent".into(), vec![HookGroup {
+        matcher: "*".into(),
+        hooks: vec![HookDef {
+            hook_type: "command".into(),
+            command: "input=$(cat); printf '{\"event\":\"before_agent\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\"".into(),
+        }],
+    }]);
+    settings.hooks.insert("BeforeTool".into(), vec![HookGroup {
+        matcher: "*".into(),
+        hooks: vec![HookDef {
+            hook_type: "command".into(),
+            command: "input=$(cat); printf '{\"event\":\"pre_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\"".into(),
+        }],
+    }]);
+    settings.hooks.insert("AfterTool".into(), vec![HookGroup {
+        matcher: "*".into(),
+        hooks: vec![HookDef {
+            hook_type: "command".into(),
+            command: "input=$(cat); printf '{\"event\":\"after_tool\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\"".into(),
+        }],
+    }]);
+    settings.hooks.insert(
+        "AfterAgent".into(),
+        vec![HookGroup {
+            matcher: "*".into(),
+            hooks: vec![HookDef {
+                hook_type: "command".into(),
+                command: after_agent_command.into(),
             }],
-            "BeforeTool": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"pre_tool_use\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
+        }],
+    );
+    settings.hooks.insert(
+        "SessionEnd".into(),
+        vec![HookGroup {
+            matcher: "*".into(),
+            hooks: vec![HookDef {
+                hook_type: "command".into(),
+                command:
+                    "cat > /dev/null; echo '{\"event\":\"session_end\"}' > \"$COOP_HOOK_PIPE\""
+                        .into(),
             }],
-            "AfterTool": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"after_tool\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }],
-            "AfterAgent": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": after_agent_command
-                }]
-            }],
-            "SessionEnd": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "cat > /dev/null; echo '{\"event\":\"session_end\"}' > \"$COOP_HOOK_PIPE\""
-                }]
-            }],
-            "Notification": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "input=$(cat); printf '{\"event\":\"notification\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\""
-                }]
-            }]
-        }
-    })
+        }],
+    );
+    settings.hooks.insert("Notification".into(), vec![HookGroup {
+        matcher: "*".into(),
+        hooks: vec![HookDef {
+            hook_type: "command".into(),
+            command: "input=$(cat); printf '{\"event\":\"notification\",\"data\":%s}\\n' \"$input\" > \"$COOP_HOOK_PIPE\"".into(),
+        }],
+    }]);
+    settings
 }
 
 /// Return environment variables to set on the Gemini child process.

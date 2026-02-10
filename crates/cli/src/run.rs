@@ -117,8 +117,10 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
     };
     let stop_config = agent_file_config.as_ref().and_then(|c| c.stop.clone()).unwrap_or_default();
     let start_config = agent_file_config.as_ref().and_then(|c| c.start.clone()).unwrap_or_default();
-    let base_settings = agent_file_config.as_ref().and_then(|c| c.settings.clone());
-    let mcp_config = agent_file_config.as_ref().and_then(|c| c.mcp.clone());
+    let base_settings: Option<config::AgentSettings> =
+        agent_file_config.as_ref().and_then(|c| c.settings.clone());
+    let mcp_config: Option<config::McpConfig> =
+        agent_file_config.as_ref().and_then(|c| c.mcp.clone());
 
     // 1. Handle --resume: discover session log and build resume state.
     let (resume_state, resume_log_path) = if let Some(ref resume_hint) = config.resume {
@@ -548,8 +550,8 @@ fn prepare_pristine_extras(
     agent: AgentType,
     working_dir: &std::path::Path,
     coop_url: &str,
-    base_settings: Option<&serde_json::Value>,
-    mcp_config: Option<&serde_json::Value>,
+    base_settings: Option<&config::AgentSettings>,
+    mcp_config: Option<&config::McpConfig>,
 ) -> anyhow::Result<PristineExtras> {
     let mut extra_args = Vec::new();
     let mut extra_env = vec![("COOP_URL".to_string(), coop_url.to_string())];
@@ -590,11 +592,10 @@ fn prepare_pristine_extras(
                 let session_dir = claude_setup::coop_session_dir(&dir_id)?;
 
                 // Build settings with MCP embedded (no hooks).
-                let mut settings = base_settings.cloned().unwrap_or(serde_json::json!({}));
+                let mut settings = base_settings.cloned().unwrap_or_default();
                 if let Some(mcp) = mcp_config {
-                    if let Some(obj) = settings.as_object_mut() {
-                        obj.insert("mcpServers".to_string(), mcp.clone());
-                    }
+                    let mcp_value = serde_json::to_value(mcp)?;
+                    settings.extra.insert("mcpServers".to_string(), mcp_value);
                 }
                 let path = session_dir.join("coop-gemini-settings.json");
                 std::fs::write(&path, serde_json::to_string_pretty(&settings)?)?;

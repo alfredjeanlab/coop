@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use serde_json::json;
-
 use super::prepare_gemini_session;
+use crate::config::{AgentSettings, HookDef, HookGroup, McpConfig, McpServer, Permissions};
 
 #[test]
 fn prepare_session_creates_settings_file() -> anyhow::Result<()> {
@@ -60,13 +59,33 @@ fn prepare_session_has_no_extra_args() -> anyhow::Result<()> {
 #[test]
 fn prepare_session_with_base_settings_merges_hooks() -> anyhow::Result<()> {
     let work_dir = tempfile::tempdir()?;
-    let orchestrator = json!({
-        "hooks": {
-            "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "gt-prime"}]}],
-            "BeforeTool": [{"matcher": "*", "hooks": [{"type": "command", "command": "gt-guard"}]}]
-        },
-        "permissions": { "allow": ["shell"] }
-    });
+    let orchestrator = AgentSettings {
+        hooks: [
+            (
+                "SessionStart".into(),
+                vec![HookGroup {
+                    matcher: "*".into(),
+                    hooks: vec![HookDef {
+                        hook_type: "command".into(),
+                        command: "gt-prime".into(),
+                    }],
+                }],
+            ),
+            (
+                "BeforeTool".into(),
+                vec![HookGroup {
+                    matcher: "*".into(),
+                    hooks: vec![HookDef {
+                        hook_type: "command".into(),
+                        command: "gt-guard".into(),
+                    }],
+                }],
+            ),
+        ]
+        .into(),
+        permissions: Some(Permissions { allow: vec!["shell".into()], ..Default::default() }),
+        ..Default::default()
+    };
     let setup =
         prepare_gemini_session(work_dir.path(), "http://127.0.0.1:0", Some(&orchestrator), None)?;
 
@@ -98,9 +117,15 @@ fn prepare_session_with_base_settings_merges_hooks() -> anyhow::Result<()> {
 #[test]
 fn prepare_session_with_mcp_config_includes_servers() -> anyhow::Result<()> {
     let work_dir = tempfile::tempdir()?;
-    let mcp = json!({
-        "my-server": { "command": "node", "args": ["server.js"] }
-    });
+    let mcp: McpConfig = [(
+        "my-server".into(),
+        McpServer {
+            command: Some("node".into()),
+            args: vec!["server.js".into()],
+            extra: Default::default(),
+        },
+    )]
+    .into();
     let setup = prepare_gemini_session(work_dir.path(), "http://127.0.0.1:0", None, Some(&mcp))?;
 
     let settings_path = setup
