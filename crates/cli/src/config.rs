@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -289,6 +290,75 @@ impl Config {
     }
 }
 
+/// Agent settings (hooks, permissions, env, plugins).
+///
+/// Orchestrator settings form the base layer; coop's detection hooks are appended
+/// via [`merge_settings`]. The `extra` map captures any unrecognized top-level keys.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentSettings {
+    /// Hook definitions keyed by hook type (e.g. `"PostToolUse"`, `"Stop"`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hooks: BTreeMap<String, Vec<HookRule>>,
+    /// Permission rules for the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Permissions>,
+    /// Environment variables passed to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
+    /// Catch-all for unrecognized top-level keys.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// A hook rule with a matcher pattern and list of actions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookRule {
+    /// Glob/regex pattern for matching (empty string = match all).
+    #[serde(default)]
+    pub matcher: String,
+    /// Hook actions to execute when matched.
+    #[serde(default)]
+    pub hooks: Vec<HookAction>,
+}
+
+/// A single hook action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookAction {
+    /// Action type (e.g. `"command"`).
+    #[serde(rename = "type")]
+    pub action_type: String,
+    /// Shell command to execute (for `type="command"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+/// Permission rules (allow/deny lists).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Permissions {
+    /// Allowed tool patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<serde_json::Value>,
+    /// Denied tool patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<serde_json::Value>,
+}
+
+/// Map of MCP server name to server definition.
+pub type McpConfig = BTreeMap<String, McpServerDef>;
+
+/// An MCP server definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerDef {
+    /// Command to execute.
+    pub command: String,
+    /// Command arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Catch-all for additional fields (env, cwd, etc.).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
 /// Contents of the `--agent-config` JSON file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentFileConfig {
@@ -301,12 +371,12 @@ pub struct AgentFileConfig {
     /// Agent settings (hooks, permissions, env, plugins) merged with coop's hooks.
     /// Orchestrator settings form the base layer; coop's detection hooks are appended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub settings: Option<serde_json::Value>,
+    pub settings: Option<AgentSettings>,
     /// MCP server definitions (`{"server-name": {"command": ...}, ...}`).
     /// For Claude, wrapped in `{"mcpServers": ...}` and passed via `--mcp-config`.
     /// For Gemini, inserted as `mcpServers` in the settings file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<serde_json::Value>,
+    pub mcp: Option<McpConfig>,
 }
 
 /// Load and parse the agent config file at `path`.
@@ -324,44 +394,12 @@ pub fn load_agent_config(path: &Path) -> anyhow::Result<AgentFileConfig> {
 /// 1. `hooks`: per hook type, concatenate arrays (orchestrator entries first, coop entries appended)
 /// 2. All other top-level keys: orchestrator values pass through unchanged (coop never sets these)
 ///
-/// Returns the merged settings as a JSON value.
-pub fn merge_settings(
-    orchestrator: &serde_json::Value,
-    coop: serde_json::Value,
-) -> serde_json::Value {
+/// Returns the merged settings.
+pub fn merge_settings(orchestrator: &AgentSettings, coop: AgentSettings) -> AgentSettings {
     let mut merged = orchestrator.clone();
 
-    let Some(coop_hooks) = coop.get("hooks").and_then(|h| h.as_object()) else {
-        return merged;
-    };
-
-    // Ensure merged has a hooks object
-    let merged_obj = match merged.as_object_mut() {
-        Some(obj) => obj,
-        None => return coop,
-    };
-    if !merged_obj.contains_key("hooks") {
-        merged_obj.insert("hooks".to_string(), serde_json::json!({}));
-    }
-    let merged_hooks = merged_obj.get_mut("hooks").and_then(|h| h.as_object_mut());
-    let Some(merged_hooks) = merged_hooks else {
-        return merged;
-    };
-
-    for (hook_type, coop_entries) in coop_hooks {
-        let Some(coop_arr) = coop_entries.as_array() else {
-            continue;
-        };
-        match merged_hooks.get_mut(hook_type) {
-            Some(existing) => {
-                if let Some(existing_arr) = existing.as_array_mut() {
-                    existing_arr.extend(coop_arr.iter().cloned());
-                }
-            }
-            None => {
-                merged_hooks.insert(hook_type.clone(), coop_entries.clone());
-            }
-        }
+    for (hook_type, coop_entries) in coop.hooks {
+        merged.hooks.entry(hook_type).or_default().extend(coop_entries);
     }
 
     merged

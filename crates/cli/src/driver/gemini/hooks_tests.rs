@@ -8,15 +8,14 @@ use super::{generate_hook_config, hook_env_vars, write_hook_config};
 #[test]
 fn generated_config_has_required_hooks() {
     let config = generate_hook_config(Path::new("/tmp/coop.pipe"));
-    let hooks = &config["hooks"];
 
-    assert!(hooks.get("SessionStart").is_some());
-    assert!(hooks.get("BeforeAgent").is_some());
-    assert!(hooks.get("BeforeTool").is_some());
-    assert!(hooks.get("AfterTool").is_some());
-    assert!(hooks.get("AfterAgent").is_some());
-    assert!(hooks.get("SessionEnd").is_some());
-    assert!(hooks.get("Notification").is_some());
+    assert!(config.hooks.contains_key("SessionStart"));
+    assert!(config.hooks.contains_key("BeforeAgent"));
+    assert!(config.hooks.contains_key("BeforeTool"));
+    assert!(config.hooks.contains_key("AfterTool"));
+    assert!(config.hooks.contains_key("AfterAgent"));
+    assert!(config.hooks.contains_key("SessionEnd"));
+    assert!(config.hooks.contains_key("Notification"));
 
     // Verify nested matcher + hooks structure
     for hook_name in [
@@ -28,11 +27,9 @@ fn generated_config_has_required_hooks() {
         "SessionEnd",
         "Notification",
     ] {
-        let hook = &hooks[hook_name];
-        assert!(hook.is_array(), "{hook_name} should be an array");
-        assert_eq!(hook[0]["matcher"], "*", "{hook_name} matcher should be wildcard");
-        assert!(hook[0]["hooks"].is_array(), "{hook_name} hooks should be array");
-        assert_eq!(hook[0]["hooks"][0]["type"], "command", "{hook_name} type should be command");
+        let rules = &config.hooks[hook_name];
+        assert_eq!(rules[0].matcher, "*", "{hook_name} matcher should be wildcard");
+        assert_eq!(rules[0].hooks[0].action_type, "command", "{hook_name} type should be command");
     }
 }
 

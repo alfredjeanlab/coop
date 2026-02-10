@@ -4,6 +4,7 @@
 use serde_json::json;
 
 use super::prepare_gemini_session;
+use crate::config::{AgentSettings, McpConfig};
 
 #[test]
 fn prepare_session_creates_settings_file() -> anyhow::Result<()> {
@@ -60,13 +61,13 @@ fn prepare_session_has_no_extra_args() -> anyhow::Result<()> {
 #[test]
 fn prepare_session_with_base_settings_merges_hooks() -> anyhow::Result<()> {
     let work_dir = tempfile::tempdir()?;
-    let orchestrator = json!({
+    let orchestrator: AgentSettings = serde_json::from_value(json!({
         "hooks": {
             "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "gt-prime"}]}],
             "BeforeTool": [{"matcher": "*", "hooks": [{"type": "command", "command": "gt-guard"}]}]
         },
         "permissions": { "allow": ["shell"] }
-    });
+    }))?;
     let setup =
         prepare_gemini_session(work_dir.path(), "http://127.0.0.1:0", Some(&orchestrator), None)?;
 
@@ -98,9 +99,9 @@ fn prepare_session_with_base_settings_merges_hooks() -> anyhow::Result<()> {
 #[test]
 fn prepare_session_with_mcp_config_includes_servers() -> anyhow::Result<()> {
     let work_dir = tempfile::tempdir()?;
-    let mcp = json!({
+    let mcp: McpConfig = serde_json::from_value(json!({
         "my-server": { "command": "node", "args": ["server.js"] }
-    });
+    }))?;
     let setup = prepare_gemini_session(work_dir.path(), "http://127.0.0.1:0", None, Some(&mcp))?;
 
     let settings_path = setup

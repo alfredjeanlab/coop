@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use super::hooks::generate_hook_config;
 use super::resume::ResumeState;
+use crate::config::AgentSettings;
 
 /// Everything needed to spawn (or resume) a Claude session.
 pub struct ClaudeSessionSetup {
@@ -35,7 +36,7 @@ pub struct ClaudeSessionSetup {
 pub fn prepare_claude_session(
     working_dir: &Path,
     coop_url: &str,
-    base_settings: Option<&serde_json::Value>,
+    base_settings: Option<&AgentSettings>,
 ) -> anyhow::Result<ClaudeSessionSetup> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let log_path = session_log_path(working_dir, &session_id);
@@ -69,7 +70,7 @@ pub fn prepare_claude_resume(
     resume_state: &ResumeState,
     existing_log_path: &Path,
     coop_url: &str,
-    base_settings: Option<&serde_json::Value>,
+    base_settings: Option<&AgentSettings>,
 ) -> anyhow::Result<ClaudeSessionSetup> {
     let resume_id = resume_state.conversation_id.as_deref().unwrap_or("unknown");
     let session_dir = coop_session_dir(resume_id)?;
@@ -98,7 +99,7 @@ pub fn prepare_claude_resume(
 fn write_settings_file(
     dir: &Path,
     pipe_path: &Path,
-    base_settings: Option<&serde_json::Value>,
+    base_settings: Option<&AgentSettings>,
 ) -> anyhow::Result<PathBuf> {
     let coop_config = generate_hook_config(pipe_path);
     let mut merged = match base_settings {
@@ -117,24 +118,11 @@ fn write_settings_file(
 ///
 /// The stop hook block reason tells the agent to run `coop send '...'`,
 /// so coop must ensure that command is pre-approved.
-fn inject_coop_permissions(config: &mut serde_json::Value) {
-    use serde_json::json;
-
-    let rule = json!("Bash(coop send:*)");
-
-    // Navigate to config.permissions.allow, creating along the way.
-    let Some(obj) = config.as_object_mut() else {
-        return;
-    };
-    let perms = obj.entry("permissions").or_insert_with(|| json!({}));
-    let Some(perms_obj) = perms.as_object_mut() else {
-        return;
-    };
-    let allow = perms_obj.entry("allow").or_insert_with(|| json!([]));
-    if let Some(arr) = allow.as_array_mut() {
-        if !arr.contains(&rule) {
-            arr.push(rule);
-        }
+fn inject_coop_permissions(config: &mut AgentSettings) {
+    let rule = serde_json::Value::String("Bash(coop send:*)".to_owned());
+    let perms = config.permissions.get_or_insert_with(crate::config::Permissions::default);
+    if !perms.allow.contains(&rule) {
+        perms.allow.push(rule);
     }
 }
 
