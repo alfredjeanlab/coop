@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 
 #[tokio::test]
 async fn large_output_ring_buffer_integrity() -> anyhow::Result<()> {
-    let capacity = 1_048_576; // 1MB
+    let capacity = coop::config::DEFAULT_RING_SIZE;
     let mut ring = RingBuffer::new(capacity);
 
     // Write 128KB of known-pattern data
@@ -36,7 +36,7 @@ async fn large_output_ring_buffer_integrity() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn ring_buffer_wrap_preserves_recent() -> anyhow::Result<()> {
-    let capacity = 1_048_576; // 1MB
+    let capacity = coop::config::DEFAULT_RING_SIZE;
     let mut ring = RingBuffer::new(capacity);
 
     // Write 2MB — oldest 1MB should be overwritten
@@ -65,7 +65,8 @@ async fn ring_buffer_wrap_preserves_recent() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn http_output_endpoint_large_response() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(1_048_576).build();
+    let (app_state, _rx) =
+        AppStateBuilder::new().ring_size(coop::config::DEFAULT_RING_SIZE).build();
 
     // Write 128KB of known data directly to the ring buffer
     let pattern: Vec<u8> = (0..128 * 1024).map(|i| (i % 256) as u8).collect();
@@ -98,7 +99,8 @@ async fn ws_replay_large_offset() -> anyhow::Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(1_048_576).build();
+    let (app_state, _rx) =
+        AppStateBuilder::new().ring_size(coop::config::DEFAULT_RING_SIZE).build();
 
     // Write 256KB
     let data: Vec<u8> = (0..256 * 1024).map(|i| (i % 256) as u8).collect();
@@ -153,7 +155,8 @@ async fn ws_replay_large_offset() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn concurrent_readers_during_write() -> anyhow::Result<()> {
-    let (app_state, _rx) = AppStateBuilder::new().ring_size(1_048_576).build();
+    let (app_state, _rx) =
+        AppStateBuilder::new().ring_size(coop::config::DEFAULT_RING_SIZE).build();
     let state = Arc::clone(&app_state);
 
     // Writer task: pump data into ring buffer
