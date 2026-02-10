@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Alfred Jean LLC
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -75,7 +75,7 @@ pub struct ErrorInfo {
 pub struct DriverState {
     pub agent_state: RwLock<AgentState>,
     pub state_seq: AtomicU64,
-    pub detection_tier: AtomicU8,
+    pub detection_tier: RwLock<Option<u8>>,
     /// Freeform cause string from the detector that produced the current state.
     pub detection_cause: RwLock<String>,
     /// Error detail + category when agent is in `Error` state, `None` otherwise.
@@ -89,12 +89,10 @@ pub struct DriverState {
 
 impl DriverState {
     /// Format the current detection tier as a display string.
-    pub fn detection_tier_str(&self) -> String {
-        let tier = self.detection_tier.load(std::sync::atomic::Ordering::Acquire);
-        if tier == u8::MAX {
-            "none".to_owned()
-        } else {
-            tier.to_string()
+    pub async fn detection_tier_str(&self) -> String {
+        match *self.detection_tier.read().await {
+            Some(tier) => tier.to_string(),
+            None => "none".to_owned(),
         }
     }
 }

@@ -95,9 +95,6 @@
   21. Inconsistent skip_serializing_if across serde structs
   - Some use skip_serializing_if = "Option::is_none", some just #[serde(default)], causing different round-trip behavior.
 
-  22. Detection tier uses sentinel u8::MAX (state.rs:70)
-  - Sentinel value instead of Option<u8>, requiring special-casing in display logic.
-
   23. Split state across 5 Arc-wrapped structs (TerminalState, DriverState, LifecycleState, StopState, StartState)
   - Manual ordering comments needed to maintain correctness (e.g., "exit_status must be written before agent_state"). A single state machine struct with explicit transition methods
   would be safer.

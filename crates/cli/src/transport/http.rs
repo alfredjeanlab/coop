@@ -314,7 +314,7 @@ pub async fn agent_state(State(s): State<Arc<AppState>>) -> impl IntoResponse {
         state: state.as_str().to_owned(),
         since_seq: s.driver.state_seq.load(Ordering::Acquire),
         screen_seq: screen.seq(),
-        detection_tier: s.driver.detection_tier_str(),
+        detection_tier: s.driver.detection_tier_str().await,
         prompt: state.prompt().cloned(),
         error_detail: s.driver.error.read().await.as_ref().map(|e| e.detail.clone()),
         error_category: s
