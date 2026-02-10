@@ -14,6 +14,16 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::GroomLevel;
+use crate::run::{IO_CHANNEL_CAPACITY, SIGNAL_CHANNEL_CAPACITY};
+
+/// Default terminal width for tests.
+pub const TEST_COLS: u16 = 80;
+
+/// Default terminal height for tests.
+pub const TEST_ROWS: u16 = 24;
+
+/// Default ring buffer size for tests (64 KiB).
+pub const TEST_RING_SIZE: usize = 65_536;
 use crate::driver::{
     AgentState, AgentType, Detector, ExitStatus, NudgeEncoder, NudgeStep, RespondEncoder,
 };
@@ -116,13 +126,13 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<Store> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<TransitionEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptOutcome>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(IO_CHANNEL_CAPACITY);
+        let (state_tx, _) = broadcast::channel::<TransitionEvent>(SIGNAL_CHANNEL_CAPACITY);
+        let (prompt_tx, _) = broadcast::channel::<PromptOutcome>(SIGNAL_CHANNEL_CAPACITY);
 
         Arc::new(Store {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(TEST_COLS, TEST_ROWS)),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
