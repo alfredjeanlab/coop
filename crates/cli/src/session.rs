@@ -261,7 +261,7 @@ impl Session {
                         // Store metadata for the HTTP/gRPC API.
                         self.app_state.driver.state_seq.store(state_seq, std::sync::atomic::Ordering::Release);
                         *self.app_state.driver.detection.write().await = crate::transport::state::DetectionInfo {
-                            tier: detected.tier,
+                            tier: Some(detected.tier),
                             cause: detected.cause.clone(),
                         };
 
