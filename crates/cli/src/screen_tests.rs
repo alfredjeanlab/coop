@@ -3,9 +3,11 @@
 
 use super::*;
 
+use crate::test_support::{TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS};
+
 #[test]
 fn feed_plain_text() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     screen.feed(b"hello world");
     let snap = screen.snapshot();
     assert!(snap.lines[0].contains("hello world"));
@@ -14,7 +16,7 @@ fn feed_plain_text() {
 
 #[test]
 fn feed_ansi_color() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // Red text "hi" then reset
     screen.feed(b"\x1b[31mhi\x1b[0m");
     let snap = screen.snapshot();
@@ -23,7 +25,7 @@ fn feed_ansi_color() {
 
 #[test]
 fn alt_screen_toggle() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     assert!(!screen.is_alt_screen());
 
     // Enter alt screen
@@ -37,7 +39,7 @@ fn alt_screen_toggle() {
 
 #[test]
 fn resize() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     screen.resize(40, 10);
     let snap = screen.snapshot();
     assert_eq!(snap.cols, 40);
@@ -46,7 +48,7 @@ fn resize() {
 
 #[test]
 fn changed_flag() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     assert!(!screen.changed());
 
     screen.feed(b"x");
@@ -58,7 +60,7 @@ fn changed_flag() {
 
 #[test]
 fn empty_feed_is_noop() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     screen.feed(b"");
     assert!(!screen.changed());
     assert_eq!(screen.seq(), 0);
@@ -66,7 +68,7 @@ fn empty_feed_is_noop() {
 
 #[test]
 fn cursor_position() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     screen.feed(b"abc");
     let snap = screen.snapshot();
     assert_eq!(snap.cursor.col, 3);
@@ -75,13 +77,13 @@ fn cursor_position() {
 
 #[test]
 fn alt_screen_toggle_split_across_chunks() {
-    let screen = Screen::new(80, 24);
+    let screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     assert!(!screen.is_alt_screen());
 
     // Split "\x1b[?1049h" across two feed() calls at every possible boundary.
     let seq = b"\x1b[?1049h";
     for split in 1..seq.len() {
-        let mut s = Screen::new(80, 24);
+        let mut s = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
         s.feed(&seq[..split]);
         s.feed(&seq[split..]);
         assert!(s.is_alt_screen(), "split at byte {split}: expected alt screen ON");
@@ -90,7 +92,7 @@ fn alt_screen_toggle_split_across_chunks() {
     // Now test disable split: "\x1b[?1049l"
     let seq_off = b"\x1b[?1049l";
     for split in 1..seq_off.len() {
-        let mut s = Screen::new(80, 24);
+        let mut s = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
         s.feed(b"\x1b[?1049h"); // enter alt screen first
         assert!(s.is_alt_screen());
 
@@ -102,7 +104,7 @@ fn alt_screen_toggle_split_across_chunks() {
 
 #[test]
 fn alt_screen_toggle_with_surrounding_data() {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // Sequence embedded in surrounding output, split right before the final byte
     let chunk1 = b"hello\x1b[?1049".to_vec();
     let chunk2 = b"hworld";
@@ -114,7 +116,7 @@ fn alt_screen_toggle_with_surrounding_data() {
 
 #[test]
 fn feed_split_utf8_two_byte() -> anyhow::Result<()> {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // é is U+00E9, encoded as [0xC3, 0xA9]
     screen.feed(&[0xC3]);
     screen.feed(&[0xA9]);
@@ -125,7 +127,7 @@ fn feed_split_utf8_two_byte() -> anyhow::Result<()> {
 
 #[test]
 fn feed_split_utf8_three_byte() -> anyhow::Result<()> {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // ★ is U+2605, encoded as [0xE2, 0x98, 0x85]
     screen.feed(&[0xE2]);
     screen.feed(&[0x98, 0x85]);
@@ -136,7 +138,7 @@ fn feed_split_utf8_three_byte() -> anyhow::Result<()> {
 
 #[test]
 fn feed_split_utf8_four_byte() -> anyhow::Result<()> {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // 😀 is U+1F600, encoded as [0xF0, 0x9F, 0x98, 0x80]
     screen.feed(&[0xF0, 0x9F]);
     screen.feed(&[0x98, 0x80]);
@@ -147,7 +149,7 @@ fn feed_split_utf8_four_byte() -> anyhow::Result<()> {
 
 #[test]
 fn feed_split_utf8_with_surrounding_ascii() -> anyhow::Result<()> {
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(TEST_TERMINAL_COLS, TEST_TERMINAL_ROWS);
     // "abc" + first byte of é
     screen.feed(b"abc\xC3");
     // second byte of é + "def"
