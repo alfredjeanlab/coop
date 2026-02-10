@@ -24,6 +24,11 @@ use crate::event::{InputEvent, OutputEvent, PromptOutcome, TransitionEvent};
 use crate::pty::{Backend, BackendInput, Boxed};
 use crate::transport::Store;
 
+/// Capacity for backend I/O channels.
+const BACKEND_CHANNEL_CAPACITY: usize = 256;
+/// Capacity for the detector event channel.
+const DETECTOR_CHANNEL_CAPACITY: usize = 64;
+
 /// Runtime objects for building a new [`Session`] (not derivable from [`Config`]).
 pub struct SessionConfig {
     pub backend: Box<dyn Backend>,
@@ -108,8 +113,9 @@ impl Session {
         let _ = backend.resize(config.cols, config.rows);
 
         // Create backend I/O channels
-        let (backend_output_tx, backend_output_rx) = mpsc::channel(256);
-        let (backend_input_tx, backend_input_rx) = mpsc::channel::<BackendInput>(256);
+        let (backend_output_tx, backend_output_rx) = mpsc::channel(BACKEND_CHANNEL_CAPACITY);
+        let (backend_input_tx, backend_input_rx) =
+            mpsc::channel::<BackendInput>(BACKEND_CHANNEL_CAPACITY);
         let (resize_tx, resize_rx) = mpsc::channel(4);
 
         // Spawn backend task
@@ -118,7 +124,7 @@ impl Session {
         });
 
         // Build and spawn the composite detector (tier resolution + dedup).
-        let (detector_tx, detector_rx) = mpsc::channel(64);
+        let (detector_tx, detector_rx) = mpsc::channel(DETECTOR_CHANNEL_CAPACITY);
         let composite = CompositeDetector { tiers: detectors };
         let detector_shutdown = shutdown.clone();
         tokio::spawn(composite.run(detector_tx, detector_shutdown));

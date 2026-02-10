@@ -5,7 +5,7 @@ use bytes::Bytes;
 use coop::pty::spawn::NativePty;
 use coop::pty::{Backend, BackendInput};
 use coop::ring::RingBuffer;
-use coop::screen::Screen;
+use coop::screen::{Screen, DEFAULT_COLS, DEFAULT_ROWS};
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -15,7 +15,8 @@ async fn spawn_and_capture() {
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty =
-        NativePty::spawn(&["echo".into(), "hello".into()], 80, 24, &[]).expect("spawn failed");
+        NativePty::spawn(&["echo".into(), "hello".into()], DEFAULT_COLS, DEFAULT_ROWS, &[])
+            .expect("spawn failed");
 
     assert!(pty.child_pid().is_some());
 
@@ -37,7 +38,8 @@ async fn input_delivery() {
     let (input_tx, input_rx) = mpsc::channel::<BackendInput>(64);
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
-    let mut pty = NativePty::spawn(&["/bin/cat".into()], 80, 24, &[]).expect("spawn failed");
+    let mut pty = NativePty::spawn(&["/bin/cat".into()], DEFAULT_COLS, DEFAULT_ROWS, &[])
+        .expect("spawn failed");
 
     let handle = tokio::spawn(async move { pty.run(output_tx, input_rx, resize_rx).await });
 
@@ -61,8 +63,13 @@ async fn input_delivery() {
 
 #[tokio::test]
 async fn resize_no_error() {
-    let pty = NativePty::spawn(&["/bin/sh".into(), "-c".into(), "sleep 0.1".into()], 80, 24, &[])
-        .expect("spawn failed");
+    let pty = NativePty::spawn(
+        &["/bin/sh".into(), "-c".into(), "sleep 0.1".into()],
+        DEFAULT_COLS,
+        DEFAULT_ROWS,
+        &[],
+    )
+    .expect("spawn failed");
 
     pty.resize(40, 10).expect("resize failed");
 }
@@ -81,8 +88,8 @@ async fn resize_via_channel() -> anyhow::Result<()> {
             // Wait for SIGWINCH, then query terminal size
             "trap 'stty size' WINCH; sleep 5 & wait".into(),
         ],
-        80,
-        24,
+        DEFAULT_COLS,
+        DEFAULT_ROWS,
         &[],
     )?;
 
@@ -132,10 +139,11 @@ async fn screen_integration() {
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty =
-        NativePty::spawn(&["echo".into(), "hello".into()], 80, 24, &[]).expect("spawn failed");
+        NativePty::spawn(&["echo".into(), "hello".into()], DEFAULT_COLS, DEFAULT_ROWS, &[])
+            .expect("spawn failed");
     let _ = pty.run(output_tx, input_rx, resize_rx).await;
 
-    let mut screen = Screen::new(80, 24);
+    let mut screen = Screen::new(DEFAULT_COLS, DEFAULT_ROWS);
     while let Ok(chunk) = output_rx.try_recv() {
         screen.feed(&chunk);
     }
@@ -152,7 +160,8 @@ async fn ring_buffer_integration() {
     let (_resize_tx, resize_rx) = mpsc::channel(4);
 
     let mut pty =
-        NativePty::spawn(&["echo".into(), "hello".into()], 80, 24, &[]).expect("spawn failed");
+        NativePty::spawn(&["echo".into(), "hello".into()], DEFAULT_COLS, DEFAULT_ROWS, &[])
+            .expect("spawn failed");
     let _ = pty.run(output_tx, input_rx, resize_rx).await;
 
     let mut ring = RingBuffer::new(4096);
