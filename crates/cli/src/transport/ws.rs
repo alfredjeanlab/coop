@@ -54,13 +54,13 @@ pub enum ServerMessage {
         next: String,
         seq: u64,
         prompt: Box<Option<PromptContext>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_detail: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_category: Option<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         cause: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_message: Option<String>,
     },
     Exit {
@@ -73,16 +73,16 @@ pub enum ServerMessage {
     },
     NudgeResult {
         delivered: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         state_before: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     RespondResult {
         delivered: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     Status {
@@ -97,15 +97,15 @@ pub enum ServerMessage {
     },
     Stop {
         stop_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         signal: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_detail: Option<String>,
         seq: u64,
     },
     Start {
         source: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         injected: bool,
         seq: u64,
@@ -113,9 +113,9 @@ pub enum ServerMessage {
     PromptAction {
         source: String,
         prompt_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         subtype: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         option: Option<u32>,
     },
     InputResult {
@@ -139,11 +139,11 @@ pub enum ServerMessage {
         detection_tier: String,
         detection_cause: String,
         prompt: Option<PromptContext>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_detail: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_category: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_message: Option<String>,
     },
     Health {
@@ -204,7 +204,7 @@ pub enum ClientMessage {
     Respond {
         accept: Option<bool>,
         text: Option<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         answers: Vec<TransportQuestionAnswer>,
         option: Option<i32>,
     },
@@ -270,21 +270,13 @@ impl From<SessionStatus> for ServerMessage {
 
 impl From<NudgeOutcome> for ServerMessage {
     fn from(o: NudgeOutcome) -> Self {
-        ServerMessage::NudgeResult {
-            delivered: o.delivered,
-            state_before: o.state_before,
-            reason: o.reason,
-        }
+        Self::NudgeResult { delivered: o.delivered, state_before: o.state_before, reason: o.reason }
     }
 }
 
 impl From<RespondOutcome> for ServerMessage {
     fn from(o: RespondOutcome) -> Self {
-        ServerMessage::RespondResult {
-            delivered: o.delivered,
-            prompt_type: o.prompt_type,
-            reason: o.reason,
-        }
+        Self::RespondResult { delivered: o.delivered, prompt_type: o.prompt_type, reason: o.reason }
     }
 }
 
@@ -710,7 +702,6 @@ fn state_change_to_msg(event: &StateChangeEvent) -> ServerMessage {
     }
 }
 
-/// Convert a `StartEvent` to a `ServerMessage`.
 fn start_event_to_msg(event: &StartEvent) -> ServerMessage {
     ServerMessage::Start {
         source: event.source.clone(),
@@ -720,7 +711,6 @@ fn start_event_to_msg(event: &StartEvent) -> ServerMessage {
     }
 }
 
-/// Convert a `StopEvent` to a `ServerMessage`.
 fn stop_event_to_msg(event: &StopEvent) -> ServerMessage {
     ServerMessage::Stop {
         stop_type: event.stop_type.as_str().to_owned(),
@@ -742,16 +732,14 @@ where
     tx.send(Message::Text(text.into())).await.map_err(|_| ())
 }
 
-/// Generate a simple unique ID (not cryptographic, just for client tracking).
 fn next_client_id() -> String {
-    use std::sync::atomic::AtomicU64;
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let ts = std::time::SystemTime::now()
+    let ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{ts:x}-{n}")
+    format!("{ns:x}-{n}")
 }
 
 #[cfg(test)]
