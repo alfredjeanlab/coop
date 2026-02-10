@@ -15,6 +15,7 @@ use super::read_ring_combined;
 use crate::driver::PromptContext;
 use crate::error::ErrorCode;
 use crate::event::{OutputEvent, TransitionEvent};
+use crate::run::EVENT_CHANNEL_CAPACITY;
 use crate::start::StartConfig;
 use crate::stop::StopConfig;
 use crate::transport::handler::{
@@ -251,7 +252,7 @@ impl proto::coop_server::Coop for CoopGrpc {
         request: Request<proto::StreamOutputRequest>,
     ) -> Result<Response<Self::StreamOutputStream>, Status> {
         let from_offset = request.into_inner().from_offset;
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
 
         // Replay buffered data from ring buffer
         {

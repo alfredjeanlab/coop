@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{CompositeDetector, DetectedState};
 use crate::driver::{AgentState, ExitStatus, PromptContext, PromptKind};
+use crate::run::EVENT_CHANNEL_CAPACITY;
 use crate::test_support::MockDetector;
 
 /// Helper: run a CompositeDetector with given detectors and collect emitted states.
@@ -15,7 +16,7 @@ async fn run_composite(
     detectors: Vec<Box<dyn crate::driver::Detector>>,
     collect_timeout: Duration,
 ) -> anyhow::Result<Vec<DetectedState>> {
-    let (output_tx, mut output_rx) = mpsc::channel(64);
+    let (output_tx, mut output_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let composite = CompositeDetector { tiers: detectors };
 
     let shutdown = CancellationToken::new();

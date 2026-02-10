@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::driver::{AgentState, ExitStatus};
 use crate::event::InputEvent;
+use crate::screen;
 use crate::test_support::{AppStateBuilder, StubNudgeEncoder, StubRespondEncoder};
 use crate::transport::handler::{
     compute_health, compute_status, handle_input, handle_input_raw, handle_keys, handle_nudge,
@@ -63,8 +64,8 @@ async fn compute_health_fields() -> anyhow::Result<()> {
     assert_eq!(h.status, "running");
     assert_eq!(h.pid, Some(1234));
     assert!(h.uptime_secs >= 0);
-    assert_eq!(h.terminal_cols, 80);
-    assert_eq!(h.terminal_rows, 24);
+    assert_eq!(h.terminal_cols, screen::DEFAULT_COLS);
+    assert_eq!(h.terminal_rows, screen::DEFAULT_ROWS);
     assert_eq!(h.ws_clients, 0);
     assert!(h.ready);
     Ok(())

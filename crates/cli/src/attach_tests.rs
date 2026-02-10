@@ -3,6 +3,10 @@
 
 use super::*;
 
+use crate::run::EVENT_CHANNEL_CAPACITY;
+use crate::screen;
+use crate::test_support::TEST_RING_SIZE;
+
 /// Guard for tests that mutate environment variables. Prevents parallel races.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -161,14 +165,14 @@ fn builtin_statusline_uptime_increases() {
 
 #[tokio::test]
 async fn run_statusline_cmd_captures_output() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(screen::DEFAULT_COLS, screen::DEFAULT_ROWS);
     let result = run_statusline_cmd("echo test-output", &state).await;
     assert_eq!(result, "test-output");
 }
 
 #[tokio::test]
 async fn run_statusline_cmd_expands_state() {
-    let mut state = AttachState::new(80, 24);
+    let mut state = AttachState::new(screen::DEFAULT_COLS, screen::DEFAULT_ROWS);
     state.agent_state = "idle".to_owned();
     let result = run_statusline_cmd("echo {state}", &state).await;
     assert_eq!(result, "idle");
@@ -196,14 +200,14 @@ async fn run_statusline_cmd_expands_uptime() {
 
 #[tokio::test]
 async fn run_statusline_cmd_failed_command() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(screen::DEFAULT_COLS, screen::DEFAULT_ROWS);
     let result = run_statusline_cmd("false", &state).await;
     assert!(result.contains("failed"));
 }
 
 #[tokio::test]
 async fn run_statusline_cmd_trims_trailing_newline() {
-    let state = AttachState::new(80, 24);
+    let state = AttachState::new(screen::DEFAULT_COLS, screen::DEFAULT_ROWS);
     let result = run_statusline_cmd("printf 'hello\\n\\n'", &state).await;
     assert_eq!(result, "hello");
 }
@@ -229,7 +233,7 @@ mod ws_integration {
     async fn spawn_test_server(
         output_chunks: Vec<&str>,
     ) -> (std::net::SocketAddr, std::sync::Arc<crate::transport::state::Store>) {
-        let (state, _input_rx) = AppStateBuilder::new().ring_size(65536).build();
+        let (state, _input_rx) = AppStateBuilder::new().ring_size(TEST_RING_SIZE).build();
 
         // Write output chunks to ring buffer and broadcast them.
         {
@@ -339,7 +343,7 @@ mod ws_integration {
 
     #[tokio::test]
     async fn input_raw_reaches_server() {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(64);
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let state = AppStateBuilder::new().ring_size(4096).build_with_sender(input_tx);
 
         let (addr, _handle) = crate::test_support::spawn_http_server(std::sync::Arc::clone(&state))
@@ -367,7 +371,7 @@ mod ws_integration {
 
     #[tokio::test]
     async fn resize_reaches_server() {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(64);
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let state = AppStateBuilder::new().ring_size(4096).build_with_sender(input_tx);
 
         let (addr, _handle) = crate::test_support::spawn_http_server(std::sync::Arc::clone(&state))
@@ -444,7 +448,7 @@ mod ws_integration {
 
     #[tokio::test]
     async fn auth_then_input_raw_succeeds() {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(64);
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let state = AppStateBuilder::new()
             .ring_size(4096)
             .auth_token("secret123")

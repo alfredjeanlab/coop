@@ -22,6 +22,7 @@ use futures_util::{SinkExt, StreamExt};
 use nix::sys::termios;
 use tokio::sync::mpsc;
 
+use crate::screen;
 use crate::transport::ws::{ClientMessage, ServerMessage};
 
 /// CLI arguments for `coop attach`.
@@ -367,7 +368,8 @@ async fn attach(
     let mut stdout = std::io::stdout();
 
     // Determine initial terminal size.
-    let (init_cols, init_rows) = terminal_size().unwrap_or((80, 24));
+    let (init_cols, init_rows) =
+        terminal_size().unwrap_or((screen::DEFAULT_COLS, screen::DEFAULT_ROWS));
     let mut state = AttachState::new(init_cols, init_rows);
     let mut sl_active = sl_cfg.enabled && init_rows > 2;
 

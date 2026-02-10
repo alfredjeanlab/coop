@@ -3,6 +3,12 @@
 
 //! Top-level session runner — shared by `main` and integration tests.
 
+/// Channel capacity for high-throughput I/O channels (input, output, backend).
+pub const IO_CHANNEL_CAPACITY: usize = 256;
+
+/// Channel capacity for event channels (state transitions, prompts, detector).
+pub const EVENT_CHANNEL_CAPACITY: usize = 64;
+
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 use std::sync::Arc;
 use std::time::Instant;
@@ -301,10 +307,10 @@ pub async fn prepare(config: Config) -> anyhow::Result<PreparedSession> {
     };
 
     // Create shared channels
-    let (input_tx, consumer_input_rx) = mpsc::channel(256);
-    let (output_tx, _) = broadcast::channel(256);
-    let (state_tx, _) = broadcast::channel(64);
-    let (prompt_tx, _) = broadcast::channel(64);
+    let (input_tx, consumer_input_rx) = mpsc::channel(IO_CHANNEL_CAPACITY);
+    let (output_tx, _) = broadcast::channel(IO_CHANNEL_CAPACITY);
+    let (state_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+    let (prompt_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
     let resolve_url = format!("{coop_url_for_setup}/api/v1/hooks/stop/resolve");
     let stop_state = Arc::new(StopState::new(stop_config, resolve_url));
