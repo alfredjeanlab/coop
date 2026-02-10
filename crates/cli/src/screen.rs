@@ -3,6 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default terminal width used when the actual size is unknown.
+pub const DEFAULT_COLS: u16 = 80;
+
+/// Default terminal height used when the actual size is unknown.
+pub const DEFAULT_ROWS: u16 = 24;
+
 /// Opaque terminal screen backed by an avt virtual terminal.
 pub struct Screen {
     vt: avt::Vt,

@@ -15,7 +15,7 @@ async fn run_composite(
     detectors: Vec<Box<dyn crate::driver::Detector>>,
     collect_timeout: Duration,
 ) -> anyhow::Result<Vec<DetectedState>> {
-    let (output_tx, mut output_rx) = mpsc::channel(64);
+    let (output_tx, mut output_rx) = mpsc::channel(crate::run::CONTROL_CHANNEL_CAPACITY);
     let composite = CompositeDetector { tiers: detectors };
 
     let shutdown = CancellationToken::new();

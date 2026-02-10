@@ -2,6 +2,14 @@
 // Copyright (c) 2026 Alfred Jean LLC
 
 //! Shared test infrastructure: builders, mocks, and assertion helpers.
+//!
+//! # Test constants
+//!
+//! - [`TEST_RING_SIZE`]: Smaller ring buffer (64 KiB) used in tests for speed.
+
+/// Ring buffer size used in tests (64 KiB) — smaller than the production
+/// default ([`crate::config::DEFAULT_RING_SIZE`]) for faster, lighter tests.
+pub const TEST_RING_SIZE: usize = 65_536;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -116,13 +124,18 @@ impl AppStateBuilder {
 
     /// Build state using an externally-created `input_tx`.
     pub fn build_with_sender(self, input_tx: mpsc::Sender<InputEvent>) -> Arc<Store> {
-        let (output_tx, _) = broadcast::channel::<OutputEvent>(256);
-        let (state_tx, _) = broadcast::channel::<TransitionEvent>(64);
-        let (prompt_tx, _) = broadcast::channel::<PromptOutcome>(64);
+        let (output_tx, _) = broadcast::channel::<OutputEvent>(crate::run::IO_CHANNEL_CAPACITY);
+        let (state_tx, _) =
+            broadcast::channel::<TransitionEvent>(crate::run::CONTROL_CHANNEL_CAPACITY);
+        let (prompt_tx, _) =
+            broadcast::channel::<PromptOutcome>(crate::run::CONTROL_CHANNEL_CAPACITY);
 
         Arc::new(Store {
             terminal: Arc::new(TerminalState {
-                screen: RwLock::new(Screen::new(80, 24)),
+                screen: RwLock::new(Screen::new(
+                    crate::screen::DEFAULT_COLS,
+                    crate::screen::DEFAULT_ROWS,
+                )),
                 ring: RwLock::new(RingBuffer::new(self.ring_size)),
                 ring_total_written: Arc::new(AtomicU64::new(0)),
                 child_pid: AtomicU32::new(self.child_pid),
