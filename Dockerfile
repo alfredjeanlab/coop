@@ -86,7 +86,7 @@ COPY crates/cli/tests/scenarios/ /scenarios/
 ENTRYPOINT ["coop"]
 
 # ---------------------------------------------------------------------------
-# Agent images: coop with a pre-installed agent CLI, ready to deploy
+# Agents: coop with a pre-installed agent CLI, ready to deploy
 # ---------------------------------------------------------------------------
 
 FROM base AS claude
@@ -104,7 +104,17 @@ COPY --from=builder /coop-bin /usr/local/bin/coop
 ENTRYPOINT ["coop"]
 
 # ---------------------------------------------------------------------------
-# Coopmux: mux server with kubectl for launching session pods in Kubernetes
+# Job: one-shot agent job (optional clone → run → exit)
+# ---------------------------------------------------------------------------
+FROM claude AS job
+RUN mkdir -p /usr/local/lib/coop
+COPY deploy/init.sh /usr/local/lib/coop/init.sh
+COPY deploy/job.sh /usr/local/bin/coop-job
+RUN chmod +x /usr/local/bin/coop-job
+ENTRYPOINT ["/usr/local/bin/coop-job"]
+
+# ---------------------------------------------------------------------------
+# Mux: mux server with kubectl for launching session pods in Kubernetes
 # ---------------------------------------------------------------------------
 FROM base AS coopmux
 COPY --from=kubectl-install /usr/local/bin/kubectl /usr/local/bin/kubectl
