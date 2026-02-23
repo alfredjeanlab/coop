@@ -97,42 +97,49 @@ async fn resize_reflected_in_stty() -> anyhow::Result<()> {
     // Drain initial shell prompt output
     while tokio::time::timeout(Duration::from_millis(100), output_rx.recv()).await.is_ok() {}
 
-    // Test multiple resize values — send resize then query stty size
+    // Test multiple resize values — send resize then query stty size.
+    // Retry stty within the deadline to avoid races between the resize
+    // ioctl and the shell reading the terminal size.
     let sizes: [(u16, u16); 3] = [(100, 30), (120, 40), (60, 20)];
     for (cols, rows) in &sizes {
         resize_tx.send((*cols, *rows)).await?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Query terminal size via stty
-        input_tx.send(BackendInput::Write(bytes::Bytes::from("stty size\n"))).await?;
-
-        // Collect output until we see the expected dimensions
         let expected = format!("{rows} {cols}");
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        let mut output = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut all_output = Vec::new();
         let mut found = false;
-        loop {
-            tokio::select! {
-                chunk = output_rx.recv() => {
-                    match chunk {
-                        Some(data) => output.extend_from_slice(&data),
-                        None => break,
+
+        while !found && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+
+            // Query terminal size via stty
+            input_tx.send(BackendInput::Write(bytes::Bytes::from("stty size\n"))).await?;
+
+            // Collect output until we see the expected dimensions or a short timeout
+            let read_until = tokio::time::Instant::now() + Duration::from_millis(500);
+            loop {
+                tokio::select! {
+                    chunk = output_rx.recv() => {
+                        match chunk {
+                            Some(data) => all_output.extend_from_slice(&data),
+                            None => break,
+                        }
+                        let text = String::from_utf8_lossy(&all_output);
+                        if text.contains(&expected) {
+                            found = true;
+                            break;
+                        }
                     }
-                    let text = String::from_utf8_lossy(&output);
-                    if text.contains(&expected) {
-                        found = true;
+                    _ = tokio::time::sleep_until(read_until) => {
                         break;
                     }
-                }
-                _ = tokio::time::sleep_until(deadline) => {
-                    break;
                 }
             }
         }
         assert!(
             found,
             "expected '{expected}' after resize to {cols}x{rows}, got: {:?}",
-            String::from_utf8_lossy(&output)
+            String::from_utf8_lossy(&all_output)
         );
     }
 
