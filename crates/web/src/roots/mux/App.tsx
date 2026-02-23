@@ -61,7 +61,6 @@ function AppInner() {
       lastMessage: null,
       term: null,
       fit: null,
-      webgl: null,
       sourceCols: 80,
       sourceRows: 24,
       lastScreenLines: null,

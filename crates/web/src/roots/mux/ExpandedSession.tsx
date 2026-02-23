@@ -108,10 +108,6 @@ export function ExpandedSession({
       rpcRef.current = null;
       wsRef.current?.close();
       wsRef.current = null;
-      if (info.webgl) {
-        info.webgl.dispose();
-        info.webgl = null;
-      }
       term.dispose();
       info.term = null;
       info.fit = null;
@@ -216,18 +212,12 @@ export function ExpandedSession({
   }
 
   function handleReady() {
-    if (!info.webgl) {
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => {
-          webgl.dispose();
-          if (info.webgl === webgl) info.webgl = null;
-        });
-        term.loadAddon(webgl);
-        info.webgl = webgl;
-      } catch {
-        // canvas fallback
-      }
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      // canvas fallback
     }
     fit.fit();
     connectWs();

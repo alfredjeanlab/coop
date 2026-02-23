@@ -143,7 +143,6 @@ export interface SessionInfo {
   lastMessage: string | null;
   term: import("@xterm/xterm").Terminal | null;
   fit: import("@xterm/addon-fit").FitAddon | null;
-  webgl: import("@xterm/addon-webgl").WebglAddon | null;
   sourceCols: number;
   sourceRows: number;
   lastScreenLines: string[] | null;
