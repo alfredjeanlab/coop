@@ -146,12 +146,22 @@ async fn claude_multi_question_session_lifecycle() -> anyhow::Result<()> {
     wait_for(&mut rx, |s| matches!(s, AgentState::Prompt { .. })).await?;
 
     // Answer first question (select option 1).
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
     input_tx.send(InputEvent::Write(Bytes::from_static(b"1"))).await?;
+
+    // Wait for the write to flush before sending the next keystroke,
+    // so claudeless has time to process the selection and advance tabs.
+    let (drain_tx, drain_rx) = tokio::sync::oneshot::channel();
+    input_tx.send(InputEvent::WaitForDrain(drain_tx)).await?;
+    let _ = drain_rx.await;
 
     // Answer second question (select option 2).
     tokio::time::sleep(Duration::from_millis(100)).await;
     input_tx.send(InputEvent::Write(Bytes::from_static(b"2"))).await?;
+
+    let (drain_tx, drain_rx) = tokio::sync::oneshot::channel();
+    input_tx.send(InputEvent::WaitForDrain(drain_tx)).await?;
+    let _ = drain_rx.await;
 
     // Confirm.
     tokio::time::sleep(Duration::from_millis(100)).await;
