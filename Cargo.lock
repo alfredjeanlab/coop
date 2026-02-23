@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "coop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "coop-specs"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "coopmux"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",

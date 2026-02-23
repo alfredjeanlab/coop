@@ -7,13 +7,35 @@ Coop replaces tmux/screen-based agent orchestration with a proper API. Instead o
 ## Install
 
 ```bash
-scripts/install    # builds and installs to ~/.local/bin/
+curl -fsSL https://github.com/alfredjeanlab/coop/releases/latest/download/install.sh | bash
 ```
 
-Or build manually:
+Set `COOP_VERSION` for a specific version or `COOP_INSTALL` to change the install directory (default: `~/.local/bin`).
+
+### Build from source
 
 ```bash
-cargo build --release
+scripts/install    # builds and installs to ~/.local/bin/
+# or
+cargo build --release -p coop -p coopmux
+```
+
+### Docker
+
+Pre-built images are published to `ghcr.io/alfredjeanlab/coop`:
+
+| Image | Description |
+|-------|-------------|
+| `ghcr.io/alfredjeanlab/coop:empty` | Coop with common dev tools, no agent |
+| `ghcr.io/alfredjeanlab/coop:claude` | Coop + Claude CLI |
+| `ghcr.io/alfredjeanlab/coop:gemini` | Coop + Gemini CLI |
+| `ghcr.io/alfredjeanlab/coop:coopmux` | Coopmux server with kubectl |
+
+Tags follow the pattern `:1.0.0-claude`, `:claude` (latest). Nightly builds from main are tagged `:nightly-claude`, etc.
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/alfredjeanlab/coop:claude \
+  --port 8080 claude --dangerously-skip-permissions
 ```
 
 ## Usage
