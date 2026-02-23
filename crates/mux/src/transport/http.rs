@@ -254,9 +254,7 @@ pub async fn register_session(
                         "profile": account,
                         "force": false,
                     });
-                    if let Err(e) =
-                        client.post_json("/api/v1/session/switch", &switch_body).await
-                    {
+                    if let Err(e) = client.post_json("/api/v1/session/switch", &switch_body).await {
                         tracing::warn!(account = %account, err = %e, "failed to trigger initial switch for new session");
                     }
                 }
