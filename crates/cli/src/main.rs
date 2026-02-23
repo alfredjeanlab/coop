@@ -105,6 +105,8 @@ enum Commands {
     Send(coop::command::send::SendArgs),
     /// Manage mux credentials (list, seed, reauth).
     Cred(coop::command::cred::CredArgs),
+    /// Peek at session screens from the mux.
+    Peek(coop::command::peek::PeekArgs),
 }
 
 #[tokio::main]
@@ -123,6 +125,9 @@ async fn main() {
         }
         Some(Commands::Cred(args)) => {
             std::process::exit(coop::command::cred::run(&args).await);
+        }
+        Some(Commands::Peek(args)) => {
+            std::process::exit(coop::command::peek::run(&args).await);
         }
         None => {
             let config = cli.config;

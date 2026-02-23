@@ -150,12 +150,21 @@ pub async fn resolve_switch_profile(
 }
 
 /// Compute health info.
+///
+/// Uses `try_read` for RwLock-guarded fields to avoid blocking when locks are
+/// contended under heavy terminal I/O. K8s liveness probes must not hang.
 pub async fn compute_health(state: &Store) -> HealthInfo {
-    let snap = state.terminal.screen.read().await.snapshot();
+    let (cols, rows) = match state.terminal.screen.try_read() {
+        Ok(screen) => {
+            let s = screen.snapshot();
+            (s.cols, s.rows)
+        }
+        Err(_) => (0, 0),
+    };
     let pid = state.terminal.child_pid.load(Ordering::Relaxed);
     let uptime = state.config.started_at.elapsed().as_secs() as i64;
     let ready = state.ready.load(Ordering::Acquire);
-    let session_id = state.session_id.read().await.clone();
+    let session_id = state.session_id.try_read().map(|s| s.clone()).unwrap_or_default();
 
     HealthInfo {
         status: "running".to_owned(),
@@ -163,8 +172,8 @@ pub async fn compute_health(state: &Store) -> HealthInfo {
         pid: if pid == 0 { None } else { Some(pid as i32) },
         uptime_secs: uptime,
         agent: state.config.agent.to_string(),
-        terminal_cols: snap.cols,
-        terminal_rows: snap.rows,
+        terminal_cols: cols,
+        terminal_rows: rows,
         ws_clients: state.lifecycle.ws_client_count.load(Ordering::Relaxed),
         ready,
     }

@@ -241,9 +241,12 @@ pub fn write_credentials_file(access_token: &str) -> anyhow::Result<PathBuf> {
             })
         });
 
-    // Update the access token.
+    // Update the access token and reset the expiry.
+    // The broker manages token refresh, so set expiresAt far into the future
+    // to prevent Claude Code from treating the token as expired.
     if let Some(obj) = oauth.as_object_mut() {
         obj.insert("accessToken".to_owned(), serde_json::Value::String(access_token.to_owned()));
+        obj.insert("expiresAt".to_owned(), serde_json::json!(9_999_999_999_999u64));
     }
 
     std::fs::write(&cred_path, serde_json::to_string_pretty(&creds)?)?;
