@@ -16,7 +16,7 @@ env:
 
 jobs:
   builder:
-    name: Docker Builder
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
