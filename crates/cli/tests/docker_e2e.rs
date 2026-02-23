@@ -206,7 +206,7 @@ async fn docker_websocket_connects() -> anyhow::Result<()> {
     let container = DockerContainer::start("claude_hello.toml")?;
     container.wait_healthy(Duration::from_secs(30)).await?;
 
-    let ws_url = format!("ws://localhost:{}/ws", container.port);
+    let ws_url = format!("ws://localhost:{}/ws?subscribe=state", container.port);
     let (mut stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
     // We should receive at least one message (initial state snapshot)
