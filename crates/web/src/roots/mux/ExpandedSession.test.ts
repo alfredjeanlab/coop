@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleReplayReady } from "./ExpandedSession";
 

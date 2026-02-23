@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 const encoder = new TextEncoder();
 
 export function b64decode(str: string): Uint8Array {

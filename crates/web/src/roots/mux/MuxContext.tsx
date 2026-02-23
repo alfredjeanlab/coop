@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { createContext, type ReactNode, useContext, useState } from "react";
 
 interface MuxState {

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import type { CSSProperties } from "react";
 
 /** Parsed ANSI span with text and SGR attributes. */

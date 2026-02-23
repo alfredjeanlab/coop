@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { parseAnsiLine, spanStyle } from "./ansi";
 import { MONO_FONT, THEME } from "./constants";
 

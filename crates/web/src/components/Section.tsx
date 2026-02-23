@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 interface SectionProps {
   label: React.ReactNode;
   headerRight?: React.ReactNode;

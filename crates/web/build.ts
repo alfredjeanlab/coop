@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { $ } from "bun";
 import { rename, mkdir } from "fs/promises";
 import path from "path";

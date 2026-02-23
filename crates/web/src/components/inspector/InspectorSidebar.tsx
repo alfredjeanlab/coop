@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { useEffect, useRef, useState } from "react";
 import type { WsRequest } from "@/hooks/useWebSocket";
 import { useInterval } from "@/hooks/utils";

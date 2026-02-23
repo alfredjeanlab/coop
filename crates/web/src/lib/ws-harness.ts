@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 /**
  * WsMessageHarness — test and debug harness for PTY replay dedup.
  *

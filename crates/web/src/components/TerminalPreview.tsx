@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { useEffect, useRef } from "react";
 import { renderAnsiPre } from "@/lib/ansi-render";
 import { MONO_FONT, PREVIEW_FONT_SIZE, THEME } from "@/lib/constants";

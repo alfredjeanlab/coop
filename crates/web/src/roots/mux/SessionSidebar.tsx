@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 import { useMemo, useRef, useState } from "react";
 import { formatLabels } from "@/components/Tile";
 import type { SessionInfo } from "@/lib/types";

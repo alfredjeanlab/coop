@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 export const MONO_FONT =
   "'Source Code Pro', 'Fira Code', 'Fira Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace";
 

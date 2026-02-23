@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 const stateStyles: Record<string, string> = {
   idle: "bg-blue-500/20 text-blue-400",
   waiting_for_input: "bg-blue-500/20 text-blue-400",

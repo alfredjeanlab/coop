@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Alfred Jean LLC
+
 const variantStyles = {
   danger: "border-red-800 text-red-400 hover:border-red-400 hover:text-red-300",
   success: "border-green-800 text-green-400 hover:border-green-400 hover:text-green-300",
