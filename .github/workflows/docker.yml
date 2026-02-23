@@ -15,8 +15,30 @@ env:
   IMAGE: ghcr.io/alfredjeanlab/coop
 
 jobs:
+  builder:
+    name: Docker Builder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: github.event_name == 'push'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          platforms: ${{ github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          cache-from: type=gha,scope=docker-builder
+          cache-to: type=gha,mode=max,scope=docker-builder
+
   docker:
     name: Docker (${{ matrix.name }})
+    needs: [builder]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -70,7 +92,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-from: |
+            type=gha,scope=docker-builder
+            type=gha,scope=${{ matrix.scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
 
       - name: Build image (PR)
@@ -82,7 +106,9 @@ jobs:
           push: false
           load: true
           tags: coop:${{ matrix.name }}
-          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-from: |
+            type=gha,scope=docker-builder
+            type=gha,scope=${{ matrix.scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
 
       - name: Smoke test
@@ -91,6 +117,7 @@ jobs:
 
   docker-e2e:
     name: Docker E2E
+    needs: [builder]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +133,9 @@ jobs:
           push: false
           load: true
           tags: coop:test
-          cache-from: type=gha,scope=docker-claudeless
+          cache-from: |
+            type=gha,scope=docker-builder
+            type=gha,scope=docker-claudeless
           cache-to: type=gha,mode=max,scope=docker-claudeless
       - name: Run Docker E2E tests
         run: COOP_DOCKER_TESTS=1 cargo test --test docker_e2e -- --test-threads=1
