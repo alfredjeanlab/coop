@@ -214,13 +214,15 @@ pub async fn register_session(
             metadata: event_metadata,
         });
 
-        // Push all healthy account profiles to the new session.
+        // Push all healthy account profiles to the new session and switch
+        // to the first one so the agent starts with valid credentials.
         if let Some(ref broker) = s.credential_broker {
             let broker = Arc::clone(broker);
             let session_url = cred_url;
             let session_token = cred_token;
             tokio::spawn(async move {
                 let status_list = broker.status_list().await;
+                let mut first_healthy: Option<String> = None;
                 for acct in &status_list {
                     if acct.status != crate::credential::AccountStatus::Healthy {
                         continue;
@@ -239,6 +241,23 @@ pub async fn register_session(
                         client.post_json("/api/v1/session/profiles", &profile_body).await
                     {
                         tracing::debug!(account = %acct.name, err = %e, "failed to push profile to new session");
+                    } else if first_healthy.is_none() {
+                        first_healthy = Some(acct.name.clone());
+                    }
+                }
+
+                // Trigger a switch to the first healthy profile so the agent
+                // writes credentials to disk and (re)starts with auth.
+                if let Some(account) = first_healthy {
+                    let client = UpstreamClient::new(session_url.clone(), session_token.clone());
+                    let switch_body = serde_json::json!({
+                        "profile": account,
+                        "force": false,
+                    });
+                    if let Err(e) =
+                        client.post_json("/api/v1/session/switch", &switch_body).await
+                    {
+                        tracing::warn!(account = %account, err = %e, "failed to trigger initial switch for new session");
                     }
                 }
             });
