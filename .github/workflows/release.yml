@@ -16,6 +16,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
@@ -24,6 +25,7 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64-unknown-linux-musl
             tarball: coop-linux-aarch64.tar.gz
+            zigbuild: true
           - runner: macos-latest
             target: x86_64-apple-darwin
             tarball: coop-macos-x86_64.tar.gz
@@ -44,12 +46,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler musl-tools
 
-      - name: Install aarch64 cross toolchain
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
-          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - name: Install cargo-zigbuild
+        if: matrix.zigbuild
+        run: pip3 install cargo-zigbuild ziglang
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
@@ -60,7 +59,12 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p coop -p coopmux
+        run: |
+          if [ "${{ matrix.zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }} -p coop -p coopmux
+          else
+            cargo build --release --target ${{ matrix.target }} -p coop -p coopmux
+          fi
 
       - name: Package
         run: |
